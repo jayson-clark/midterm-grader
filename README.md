@@ -39,6 +39,32 @@ npm run bundle     # installable app in src-tauri/target/release/bundle/
 npm test           # grading engine tests
 ```
 
+## Building installers
+
+GitHub Actions builds both installers (see `.github/workflows/build.yml`):
+
+| Platform | File | Notes |
+| --- | --- | --- |
+| macOS (Apple Silicon + Intel) | `Midterm Grader_<version>_universal.dmg` | |
+| Windows 10/11 (x64) | `Midterm Grader_<version>_x64-setup.exe` (or `.msi`) | Installs per-user, no admin needed |
+
+- **Any push to `main`** (or **Run workflow** on the Actions tab) builds both. Download them from
+  the run's **Artifacts** section.
+- **Pushing a version tag** (`git tag v0.1.0 && git push --tags`) also creates a *draft* GitHub
+  Release with the installers attached. Publish it to share a download link. Bump `version` in
+  `src-tauri/tauri.conf.json` and `package.json` first.
+
+The builds aren't code-signed, so the first launch shows a warning:
+
+- **macOS**: "Apple could not verify…". Right-click the app → **Open** → **Open** (once). If macOS
+  says the app is damaged, run `xattr -cr "/Applications/Midterm Grader.app"` in Terminal.
+- **Windows**: SmartScreen "Windows protected your PC". Click **More info** → **Run anyway**.
+
+Signing with an Apple Developer ID / Windows code-signing certificate removes these warnings.
+
+To build locally on a Mac: `npm run bundle -- --target universal-apple-darwin`
+(needs `rustup target add x86_64-apple-darwin` once).
+
 ## Using it
 
 The switch in the top bar picks one of two modes.
