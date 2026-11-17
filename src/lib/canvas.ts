@@ -5,7 +5,22 @@ import { invoke } from "@tauri-apps/api/core";
 export interface PublicSettings {
   base_url: string;
   has_token: boolean;
+  /** "session" (signed in through the Canvas login window), "token", or "" (not connected) */
+  auth_mode: "session" | "token" | "";
 }
+
+export interface LoginStatus {
+  state: "pending" | "closed" | "ok";
+  name: string | null;
+  settings: PublicSettings | null;
+}
+
+export const openLogin = (baseUrl: string) => invoke<void>("open_login", { baseUrl });
+export const checkLogin = () => invoke<LoginStatus>("check_login");
+export const signOut = () => invoke<PublicSettings>("sign_out");
+
+/** Fired when Canvas says the session is gone, so the app can show the sign-in screen. */
+export const SIGNED_OUT_EVENT = "mg:signed-out";
 
 export const loadSettings = () => invoke<PublicSettings>("load_settings");
 export const saveSettings = (baseUrl: string, token: string | null) =>
@@ -23,7 +38,12 @@ export async function api<T = unknown>(path: string, opts: { method?: string; qu
       req: { method: opts.method ?? "GET", path, query: opts.query ?? null, body: opts.body ?? null, paginate: opts.paginate ?? false },
     });
   } catch (e) {
-    throw new Error(friendly(String(e)));
+    const msg = String(e);
+    if (msg.startsWith("SIGNED_OUT:")) {
+      window.dispatchEvent(new CustomEvent(SIGNED_OUT_EVENT));
+      throw new Error(msg.slice("SIGNED_OUT:".length).trim());
+    }
+    throw new Error(friendly(msg));
   }
 }
 
@@ -135,4 +155,19 @@ export async function hideGrades(assignmentId: string) {
   });
   if (res.errors?.length) throw new Error(res.errors.map((e) => e.message).join("; "));
   return res;
+}
+
+/**
+ * Opens the Canvas login window and waits until the user has signed in (state "ok") or closed
+ * the window (state "closed"). Returns null if `cancelled()` becomes true first.
+ */
+export async function signInWithCanvas(baseUrl: string, cancelled: () => boolean): Promise<LoginStatus | null> {
+  await openLogin(baseUrl);
+  while (!cancelled()) {
+    await new Promise((r) => setTimeout(r, 1500));
+    if (cancelled()) break;
+    const st = await checkLogin();
+    if (st.state !== "pending") return st;
+  }
+  return null;
 }

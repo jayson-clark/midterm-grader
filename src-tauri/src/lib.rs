@@ -7,12 +7,18 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+
+const LOGIN_LABEL: &str = "canvas-login";
 
 #[derive(Serialize, Deserialize, Default, Clone)]
 struct Settings {
     base_url: String,
+    #[serde(default)]
     token: String,
+    /// "token" (personal access token) or "session" (signed in through the in-app Canvas login)
+    #[serde(default)]
+    auth_mode: String,
 }
 
 /// What the UI sees: never the token itself, just whether one is saved.
@@ -20,6 +26,25 @@ struct Settings {
 struct PublicSettings {
     base_url: String,
     has_token: bool,
+    auth_mode: String,
+}
+
+impl From<&Settings> for PublicSettings {
+    fn from(s: &Settings) -> Self {
+        let mode = if s.auth_mode == "session" { "session" } else if !s.token.is_empty() { "token" } else { "" };
+        PublicSettings { base_url: s.base_url.clone(), has_token: !s.token.is_empty(), auth_mode: mode.into() }
+    }
+}
+
+fn write_settings(app: &AppHandle, s: &Settings) -> Result<(), String> {
+    let path = config_dir(app)?.join("settings.json");
+    fs::write(&path, serde_json::to_string_pretty(s).unwrap()).map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+    }
+    Ok(())
 }
 
 struct Http(reqwest::Client);
@@ -55,11 +80,11 @@ fn normalize_base(url: &str) -> Result<String, String> {
 
 #[tauri::command]
 fn load_settings(app: AppHandle) -> Result<PublicSettings, String> {
-    let s = read_settings(&app)?;
-    Ok(PublicSettings { base_url: s.base_url, has_token: !s.token.is_empty() })
+    Ok((&read_settings(&app)?).into())
 }
 
-/// Save the Canvas URL, and the token if one is given (empty keeps the saved token).
+/// Use a personal access token: save the Canvas URL, and the token if one is given
+/// (empty keeps the saved token).
 #[tauri::command]
 fn save_settings(app: AppHandle, base_url: String, token: Option<String>) -> Result<PublicSettings, String> {
     let mut s = read_settings(&app)?;
@@ -67,22 +92,135 @@ fn save_settings(app: AppHandle, base_url: String, token: Option<String>) -> Res
     if let Some(t) = token.map(|t| t.trim().to_string()).filter(|t| !t.is_empty()) {
         s.token = t;
     }
-    let path = config_dir(&app)?.join("settings.json");
-    fs::write(&path, serde_json::to_string_pretty(&s).unwrap()).map_err(|e| e.to_string())?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
-    }
-    Ok(PublicSettings { base_url: s.base_url, has_token: !s.token.is_empty() })
+    s.auth_mode = "token".into();
+    write_settings(&app, &s)?;
+    Ok((&s).into())
 }
 
 #[tauri::command]
 fn forget_token(app: AppHandle) -> Result<(), String> {
     let mut s = read_settings(&app)?;
     s.token.clear();
-    let path = config_dir(&app)?.join("settings.json");
-    fs::write(&path, serde_json::to_string_pretty(&s).unwrap()).map_err(|e| e.to_string())
+    if s.auth_mode == "token" {
+        s.auth_mode.clear();
+    }
+    write_settings(&app, &s)
+}
+
+// ---------- signing in with the Canvas login page instead of a token ----------
+//
+// The login window is an ordinary browser window with no access to the app's commands (it isn't
+// listed in capabilities/default.json). It shares the app's cookie store, so once the user has
+// signed in, the backend reads the Canvas cookies from that store and sends them to Canvas only.
+
+struct SessionCookies {
+    header: String,
+    csrf: Option<String>,
+}
+
+/// Cookies for the Canvas host. Runs off the main thread: reading cookies from a sync context
+/// deadlocks on Windows (WebView2).
+async fn session_cookies(app: &AppHandle, base: &str) -> Result<Option<SessionCookies>, String> {
+    let url = url::Url::parse(&format!("{base}/")).map_err(|e| e.to_string())?;
+    let app = app.clone();
+    let cookies = tauri::async_runtime::spawn_blocking(move || {
+        let wv = app.get_webview_window("main").ok_or("main window missing")?;
+        wv.cookies_for_url(url).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    if !cookies.iter().any(|c| c.name() == "canvas_session" || c.name() == "_normandy_session" || c.name() == "_legacy_normandy_session") {
+        return Ok(None);
+    }
+    let header = cookies.iter().map(|c| format!("{}={}", c.name(), c.value())).collect::<Vec<_>>().join("; ");
+    let csrf = cookies.iter().find(|c| c.name() == "_csrf_token").map(|c| {
+        percent_encoding::percent_decode_str(c.value()).decode_utf8_lossy().into_owned()
+    });
+    Ok(Some(SessionCookies { header, csrf }))
+}
+
+/// Opens the Canvas login page in its own window.
+#[tauri::command]
+async fn open_login(app: AppHandle, base_url: String) -> Result<(), String> {
+    let base = normalize_base(&base_url)?;
+    let mut s = read_settings(&app)?;
+    s.base_url = base.clone();
+    write_settings(&app, &s)?;
+    if let Some(w) = app.get_webview_window(LOGIN_LABEL) {
+        let _ = w.set_focus();
+        return Ok(());
+    }
+    let url = url::Url::parse(&format!("{base}/login")).map_err(|e| e.to_string())?;
+    WebviewWindowBuilder::new(&app, LOGIN_LABEL, WebviewUrl::External(url))
+        .title("Sign in to Canvas")
+        .inner_size(520.0, 760.0)
+        .center()
+        .build()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[derive(Serialize)]
+struct LoginStatus {
+    /// "pending" (still signing in), "closed" (window closed before signing in), "ok"
+    state: String,
+    name: Option<String>,
+    settings: Option<PublicSettings>,
+}
+
+/// Polled while the login window is open: has the user finished signing in?
+#[tauri::command]
+async fn check_login(app: AppHandle, http: tauri::State<'_, Http>) -> Result<LoginStatus, String> {
+    let mut s = read_settings(&app)?;
+    let window_open = app.get_webview_window(LOGIN_LABEL).is_some();
+    let pending = |open: bool| LoginStatus { state: if open { "pending" } else { "closed" }.into(), name: None, settings: None };
+    let Some(c) = session_cookies(&app, &s.base_url).await? else { return Ok(pending(window_open)) };
+    let resp = http.0.get(format!("{}/api/v1/users/self", s.base_url))
+        .header("Cookie", &c.header).header("Accept", "application/json")
+        .send().await.map_err(|e| format!("Network error: {e}"))?;
+    if !resp.status().is_success() {
+        return Ok(pending(window_open));
+    }
+    let text = resp.text().await.map_err(|e| e.to_string())?;
+    let me: Value = serde_json::from_str(strip_json_guard(&text)).unwrap_or(Value::Null);
+    s.auth_mode = "session".into();
+    write_settings(&app, &s)?;
+    if let Some(w) = app.get_webview_window(LOGIN_LABEL) {
+        let _ = w.close();
+    }
+    Ok(LoginStatus { state: "ok".into(), name: me.get("name").and_then(|n| n.as_str()).map(String::from), settings: Some((&s).into()) })
+}
+
+/// Signs out of Canvas in this app: deletes the Canvas cookies (and nothing else).
+#[tauri::command]
+async fn sign_out(app: AppHandle) -> Result<PublicSettings, String> {
+    let mut s = read_settings(&app)?;
+    if !s.base_url.is_empty() {
+        let url = url::Url::parse(&format!("{}/", s.base_url)).map_err(|e| e.to_string())?;
+        let app2 = app.clone();
+        tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+            let wv = app2.get_webview_window("main").ok_or("main window missing")?;
+            for c in wv.cookies_for_url(url).map_err(|e| e.to_string())? {
+                let _ = wv.delete_cookie(c);
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+    }
+    if let Some(w) = app.get_webview_window(LOGIN_LABEL) {
+        let _ = w.close();
+    }
+    if s.auth_mode == "session" {
+        s.auth_mode.clear();
+    }
+    write_settings(&app, &s)?;
+    Ok((&s).into())
+}
+
+/// Canvas prefixes JSON with `while(1);` for cookie-authenticated requests.
+fn strip_json_guard(text: &str) -> &str {
+    text.trim_start().strip_prefix("while(1);").unwrap_or(text)
 }
 
 #[derive(Deserialize)]
@@ -109,10 +247,19 @@ fn next_link(headers: &reqwest::header::HeaderMap) -> Option<String> {
 #[tauri::command]
 async fn canvas(app: AppHandle, http: tauri::State<'_, Http>, req: CanvasRequest) -> Result<Value, String> {
     let settings = read_settings(&app)?;
-    if settings.base_url.is_empty() || settings.token.is_empty() {
-        return Err("Not connected: add your Canvas URL and access token first.".into());
-    }
     let base = settings.base_url.clone();
+    let session = settings.auth_mode == "session";
+    let cookies = if session {
+        match session_cookies(&app, &base).await? {
+            Some(c) => Some(c),
+            None => return Err("SIGNED_OUT: Sign in to Canvas again.".into()),
+        }
+    } else {
+        None
+    };
+    if base.is_empty() || (!session && settings.token.is_empty()) {
+        return Err("Not connected: sign in to Canvas first.".into());
+    }
     let path = if req.path.starts_with("/api/") { req.path.clone() } else { format!("/api/v1{}", req.path) };
     if path.contains("..") || path.contains("://") {
         return Err("Invalid API path".into());
@@ -124,7 +271,17 @@ async fn canvas(app: AppHandle, http: tauri::State<'_, Http>, req: CanvasRequest
     let mut first = true;
     let mut pages: Vec<Value> = Vec::new();
     loop {
-        let mut rb = http.0.request(method.clone(), &url).bearer_auth(&settings.token).header("Accept", "application/json");
+        let mut rb = http.0.request(method.clone(), &url).header("Accept", "application/json");
+        rb = match &cookies {
+            Some(c) => {
+                let rb = rb.header("Cookie", &c.header);
+                match (&c.csrf, method != reqwest::Method::GET) {
+                    (Some(t), true) => rb.header("X-CSRF-Token", t),
+                    _ => rb,
+                }
+            }
+            None => rb.bearer_auth(&settings.token),
+        };
         if first {
             if let Some(q) = &req.query {
                 rb = rb.query(q);
@@ -138,10 +295,14 @@ async fn canvas(app: AppHandle, http: tauri::State<'_, Http>, req: CanvasRequest
         let next = next_link(resp.headers());
         let text = resp.text().await.map_err(|e| e.to_string())?;
         if !status.is_success() {
+            if session && status.as_u16() == 401 {
+                return Err("SIGNED_OUT: Your Canvas session has expired. Sign in again.".into());
+            }
             let snippet: String = text.chars().take(400).collect();
             return Err(format!("HTTP {}: {}", status.as_u16(), snippet));
         }
-        let value: Value = if text.trim().is_empty() { Value::Null } else { serde_json::from_str(&text).map_err(|e| format!("Bad JSON from Canvas: {e}"))? };
+        let body = strip_json_guard(&text);
+        let value: Value = if body.trim().is_empty() { Value::Null } else { serde_json::from_str(body).map_err(|e| format!("Bad JSON from Canvas: {e}"))? };
         if !req.paginate.unwrap_or(false) {
             return Ok(value);
         }
@@ -198,6 +359,9 @@ pub fn run() {
             load_settings,
             save_settings,
             forget_token,
+            open_login,
+            check_login,
+            sign_out,
             canvas,
             read_text_file,
             write_text_file,

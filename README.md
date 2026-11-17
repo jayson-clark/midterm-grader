@@ -5,6 +5,7 @@ rubric, see how every answer scores, review each submission, and send the result
 
 - **Only questions in your rubric are regraded.** Everything else keeps its Canvas score and is
   never sent.
+- **No setup.** Sign in with your normal Canvas login; no access token needed.
 - **Nothing reaches students without you.** If an assignment posts grades automatically, the
   app offers to switch it to manual posting (and hide visible grades) before writing anything.
 - **Backups.** Current Canvas scores are saved to a JSON file before every send.
@@ -71,9 +72,11 @@ The switch in the top bar picks one of two modes.
 
 ### Grade (for most instructors)
 
-1. **Connect.** Paste your Canvas URL and an access token (Canvas → Account → Settings →
-   *+ New Access Token*). The token is kept in the app's config folder on your computer and is
-   only ever sent to that Canvas URL.
+1. **Connect.** Click **Sign in with Canvas** and log in with your normal school login in the
+   window that opens. The app uses that sign-in only to talk to your Canvas site; nothing is read
+   from your web browser. If the session expires, a banner offers **Sign in again** without losing
+   your work. (Alternatively, open *Use an access token instead* and paste a token from Canvas →
+   Account → Settings → *+ New Access Token*; it's stored only on this computer.)
 2. **Pick a course and a quiz.** For a New Quiz, also choose its Student Analysis CSV.
 3. **Load the rubric** file (`.yaml`) the rubric author gave you.
 4. **Overview** shows the author's notes, which questions the rubric regrades, and what to do next.

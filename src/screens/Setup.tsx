@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
-  forgetToken, gradingCourses, listSubmissions, quizAssignments, readTextFile, saveSettings, whoAmI,
+  forgetToken, gradingCourses, listSubmissions, quizAssignments, readTextFile, saveSettings, signInWithCanvas, signOut, whoAmI,
   type AssignmentInfo, type Course, type PublicSettings,
 } from "../lib/canvas";
 import { loadClassicQuiz } from "../lib/sources/classic";
@@ -9,26 +9,47 @@ import { parseStudentAnalysisCsv } from "../lib/sources/newQuizzesCsv";
 import type { QuizData } from "../lib/types";
 import { ErrorNote, Spinner, fmt } from "../components/ui";
 
-export function ConnectScreen({ settings, onSaved, onOffline }: {
+export function ConnectScreen({ settings, notice, onSaved, onOffline }: {
   settings: PublicSettings | null;
+  /** e.g. "your session expired" */
+  notice?: string | null;
   onSaved: (s: PublicSettings) => void;
   onOffline: () => void;
 }) {
   const [url, setUrl] = useState(settings?.base_url || "https://osu.instructure.com");
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
+  const [waiting, setWaiting] = useState(false);
+  const [showToken, setShowToken] = useState(settings?.auth_mode === "token");
   const [error, setError] = useState<string | null>(null);
+  const cancelled = useRef(false);
 
-  async function connect() {
+  useEffect(() => () => { cancelled.current = true; }, []);
+
+  async function signIn() {
+    setError(null);
+    cancelled.current = false;
+    setWaiting(true);
+    try {
+      const st = await signInWithCanvas(url, () => cancelled.current);
+      if (st?.state === "ok" && st.settings) onSaved(st.settings);
+      else if (st?.state === "closed") setError("The sign-in window was closed before you finished signing in.");
+    } catch (e) {
+      setError(String((e as Error).message ?? e));
+    } finally {
+      setWaiting(false);
+    }
+  }
+
+  async function connectWithToken() {
     setBusy(true);
     setError(null);
     try {
       const s = await saveSettings(url, token || null);
       if (!s.has_token) throw new Error("Paste an access token.");
-      const me = await whoAmI();
+      await whoAmI();
       setToken("");
       onSaved(s);
-      void me;
     } catch (e) {
       setError(String((e as Error).message ?? e));
     } finally {
@@ -36,34 +57,71 @@ export function ConnectScreen({ settings, onSaved, onOffline }: {
     }
   }
 
+  const signedIn = settings?.auth_mode === "session";
+
   return (
     <div className="center-page">
       <div className="inner narrow">
         <div>
           <h1>Connect to Canvas</h1>
-          <p className="muted">Midterm Grader reads quiz answers from Canvas, grades them with your regex rubric, and lets you review every submission before anything is sent back.</p>
+          <p className="muted">Midterm Grader reads quiz answers from Canvas, grades them with a rubric, and lets you review every submission before anything is sent back.</p>
         </div>
+        {notice && <div className="notice warn">{notice}</div>}
         <div className="card pad col" style={{ gap: 14 }}>
           <label className="field">Canvas URL
-            <input type="text" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://school.instructure.com" />
+            <input type="text" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://school.instructure.com" disabled={waiting} />
           </label>
-          <label className="field">Access token
-            <input type="password" value={token} onChange={(e) => setToken(e.target.value)}
-              placeholder={settings?.has_token ? "Saved. Paste a new one to replace it" : "Paste token"} />
-            <span className="hint">In Canvas: Account → Settings → <b>+ New Access Token</b>. It's stored only on this computer and only sent to the Canvas URL above.</span>
-          </label>
+
+          {waiting ? (
+            <div className="notice info col" style={{ gap: 8 }}>
+              <div className="row"><Spinner /> <b>Finish signing in in the Canvas window.</b></div>
+              <div className="small">Use your normal school login. This window will continue automatically once you're signed in.</div>
+              <div><button className="btn sm" onClick={() => { cancelled.current = true; setWaiting(false); }}>Cancel</button></div>
+            </div>
+          ) : (
+            <div className="col" style={{ gap: 6 }}>
+              <div className="row">
+                <button className="btn primary" onClick={signIn} disabled={!url}>
+                  {signedIn ? "Sign in again" : "Sign in with Canvas"}
+                </button>
+                {signedIn && (
+                  <button className="btn ghost danger" onClick={async () => onSaved(await signOut())}>Sign out</button>
+                )}
+              </div>
+              <span className="muted small">
+                Opens your school's Canvas login in a window inside this app. The app uses that sign-in only to talk to the Canvas URL above,
+                and only while you're signed in. Nothing is read from your web browser.
+              </span>
+            </div>
+          )}
           <ErrorNote error={error} />
-          <div className="row">
-            <button className="btn primary" onClick={connect} disabled={busy || !url || (!token && !settings?.has_token)}>
-              {busy ? <Spinner /> : null} {settings?.has_token && !token ? "Continue" : "Connect"}
-            </button>
-            {settings?.has_token && (
-              <button className="btn ghost danger" onClick={async () => { await forgetToken(); onSaved({ ...settings, has_token: false }); }}>
-                Forget saved token
-              </button>
-            )}
-          </div>
         </div>
+
+        <div className="card pad col" style={{ gap: 12 }}>
+          <button className="btn ghost" style={{ alignSelf: "flex-start", padding: 0 }} onClick={() => setShowToken(!showToken)}>
+            {showToken ? "▾" : "▸"} Use an access token instead
+          </button>
+          {showToken && (
+            <>
+              <label className="field">Access token
+                <input type="password" value={token} onChange={(e) => setToken(e.target.value)}
+                  placeholder={settings?.has_token ? "Saved. Paste a new one to replace it" : "Paste token"} />
+                <span className="hint">In Canvas: Account → Settings → <b>+ New Access Token</b>. It's stored only on this computer and only sent to the Canvas URL above.</span>
+              </label>
+              <div className="row">
+                <button className="btn" onClick={connectWithToken} disabled={busy || !url || (!token && !settings?.has_token)}>
+                  {busy ? <Spinner /> : null} {settings?.has_token && !token ? "Continue with saved token" : "Connect with token"}
+                </button>
+                {settings?.has_token && (
+                  <button className="btn ghost danger" onClick={async () => { await forgetToken(); onSaved({ ...settings, has_token: false, auth_mode: settings.auth_mode === "token" ? "" : settings.auth_mode }); }}>
+                    Forget saved token
+                  </button>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+
         <button className="btn ghost" style={{ alignSelf: "flex-start" }} onClick={onOffline}>
           Or grade a New Quizzes report CSV without connecting →
         </button>

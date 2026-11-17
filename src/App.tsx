@@ -1,5 +1,7 @@
-import { useEffect, useState } from "react";
-import { loadSettings, type AssignmentInfo, type Course, type PublicSettings } from "./lib/canvas";
+import { useEffect, useRef, useState } from "react";
+import {
+  loadSettings, signInWithCanvas, SIGNED_OUT_EVENT, whoAmI, type AssignmentInfo, type Course, type PublicSettings,
+} from "./lib/canvas";
 import type { QuizData } from "./lib/types";
 import { AssignmentsScreen, ClassicLoadScreen, ConnectScreen, CoursesScreen, CsvLoadScreen } from "./screens/Setup";
 import { Workspace, type Mode } from "./screens/Workspace";
@@ -23,12 +25,44 @@ export default function App() {
     try { localStorage.setItem("mg:mode", m); } catch { /* not fatal */ }
   };
 
+  const [notice, setNotice] = useState<string | null>(null);
+  const [expired, setExpired] = useState(false);
+  const [reauthing, setReauthing] = useState(false);
+  const reauthCancelled = useRef(false);
+
   useEffect(() => {
-    loadSettings()
-      .then((s) => { setSettings(s); if (s.has_token && s.base_url) setView("courses"); })
-      .catch(() => {})
-      .finally(() => setBooted(true));
+    (async () => {
+      try {
+        const s = await loadSettings();
+        setSettings(s);
+        if (s.auth_mode === "token" && s.has_token && s.base_url) setView("courses");
+        if (s.auth_mode === "session") {
+          // Canvas sessions don't always survive restarting the app; check before skipping ahead.
+          try { await whoAmI(); setView("courses"); }
+          catch { setNotice("Your Canvas sign-in has ended. Sign in again to continue."); }
+        }
+      } catch { /* first run */ }
+      setBooted(true);
+    })();
   }, []);
+
+  // Canvas said the session is gone (expired or signed out elsewhere).
+  useEffect(() => {
+    const onExpired = () => setExpired(true);
+    window.addEventListener(SIGNED_OUT_EVENT, onExpired);
+    return () => window.removeEventListener(SIGNED_OUT_EVENT, onExpired);
+  }, []);
+
+  async function reauth() {
+    if (!settings) return;
+    reauthCancelled.current = false;
+    setReauthing(true);
+    try {
+      const st = await signInWithCanvas(settings.base_url, () => reauthCancelled.current);
+      if (st?.state === "ok" && st.settings) { setSettings(st.settings); setExpired(false); }
+    } catch { /* stays expired; the banner remains */ }
+    setReauthing(false);
+  }
 
   const go = (v: View) => {
     if (v === "connect" || v === "courses") { setAssignment(null); setQuiz(null); }
@@ -42,7 +76,7 @@ export default function App() {
     crumbs.push({ label: "Offline", view: "connect" });
     if (quiz) crumbs.push({ label: quiz.title, view: "load" });
   } else {
-    if (settings?.has_token) crumbs.push({ label: settings.base_url.replace(/^https?:\/\//, ""), view: "connect" });
+    if (settings?.auth_mode) crumbs.push({ label: settings.base_url.replace(/^https?:\/\//, ""), view: "connect" });
     if (course) crumbs.push({ label: course.course_code || course.name, view: "courses" });
     if (assignment) crumbs.push({ label: assignment.name, view: "assignments" });
     if (quiz && assignment?.flavor === "new_quiz") crumbs.push({ label: "Report", view: "load" });
@@ -67,11 +101,25 @@ export default function App() {
         </div>
       </header>
 
+      {expired && view !== "connect" && (
+        <div className="notice warn row" style={{ borderRadius: 0, padding: "8px 16px" }}>
+          <span className="grow">Your Canvas session has expired. Sign in again to keep working; nothing you've done here is lost.</span>
+          {reauthing ? (
+            <>
+              <span className="row small"><Spinner /> Finish signing in in the Canvas window…</span>
+              <button className="btn sm" onClick={() => { reauthCancelled.current = true; }}>Cancel</button>
+            </>
+          ) : (
+            <button className="btn sm primary" onClick={reauth}>Sign in again</button>
+          )}
+        </div>
+      )}
+
       {!booted ? (
         <div className="empty-state"><Spinner /></div>
       ) : view === "connect" ? (
-        <ConnectScreen settings={settings}
-          onSaved={(s) => { setSettings(s); if (s.has_token) { setOffline(false); go("courses"); } }}
+        <ConnectScreen settings={settings} notice={notice}
+          onSaved={(s) => { setSettings(s); setNotice(null); setExpired(false); if (s.auth_mode) { setOffline(false); go("courses"); } }}
           onOffline={() => { setOffline(true); setCourse(null); setAssignment(null); go("load"); }} />
       ) : view === "courses" ? (
         <CoursesScreen onPick={(c) => { setCourse(c); go("assignments"); }} />
