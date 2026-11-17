@@ -1,0 +1,99 @@
+# Example rubric: ENGR 1281.01H AU25 "MT 02 2025" (New Quiz, graded from the Student Analysis CSV).
+#
+# Shows the main patterns. Answer keys here were worked out from the question text; check
+# them against your own key before sending anything.
+#
+#  - Q9, Q18, Q34: fill-in-the-blank, one rule list per blank
+#  - Q15, Q17:     single blanks with case sensitivity / alternatives
+#  - Q36, Q37:     essays scored by keyword, with "keep" + flag so a human decides
+#
+# Every question NOT listed here keeps its Canvas score and is never sent to Canvas.
+
+version: 1
+title: MT 02 2025 (AU25)
+
+settings:
+  case_sensitive: false
+  whitespace: lines
+  blank_answers: zero
+
+questions:
+
+  # Q9: trace the program and fill in each printed value (12 pts, 2 per blank)
+  #   int m = 3.7 -> 3, n = 7/3 -> 2, k = 2.9 -> 2
+  #   a += m -> 3;  b = m/3.0 - --n -> 0 (n is now 1);  c = pow(5, 1) -> 5
+  #   d = k -> 2.00;  e = pow(3, 1) + (3 - 1.0) -> 5.00;  f = 5 + 3/3 - 2 -> 4.00
+  "93599":
+    points: 12
+    blanks:
+      - rules: [{ number: 3 }]
+      - rules: [{ number: 0 }]
+      - rules:
+          - number: 5
+          - number: 25
+            score: 0
+            comment: "c uses n after --n, so pow(5, 1) = 5."
+      - rules: [{ number: { value: 2, tolerance: 0.005 } }]
+      - rules: [{ number: { value: 5, tolerance: 0.005 } }]
+      - rules: [{ number: { value: 4, tolerance: 0.005 } }]
+
+  # Q15: a string ends with the null character
+  Q15:
+    points: 1
+    answer: '^[''"]?\\0[''"]?$'          # \0, '\0' or "\0"
+
+  # Q17: fgets(line, size, ____) reading from the keyboard
+  Q17:
+    points: 1
+    case_sensitive: true                 # C identifiers are case sensitive: STDIN is wrong
+    answer: '^stdin$'
+
+  # Q18: fscanf(____, "%d", ____); ____("...", somenum); fclose(____);
+  Q18:
+    points: 4
+    blanks:
+      - '^readdata$'
+      - '^&\s*somenum$'
+      - '^printf$'
+      - '^readdata$'
+
+  # Q34: safety-factor classification loop (8 pts over 6 blanks)
+  "93885":
+    points: 8
+    blanks:
+      - '^if\s*\(\s*sf\s*\[\s*counter\s*\]\s*<\s*1(\.0*)?\s*\)$'
+      - rules:
+          - all: ['^else\s*if\b', 'sf\s*\[\s*counter\s*\]\s*<\s*1\.50*\s*\)*$']
+          - match: '^else\s*if\b'
+            score: keep
+            flag: else-if with a different condition
+      - rules:
+          - match: '^else$'
+          - all: ['^else\s*if\b', 'sf\s*\[\s*counter\s*\]\s*>=\s*1\.50*\s*\)$']
+          - match: '^(else\s*)?if\b.*<\s*2(\.0*)?'
+            score: 0
+            flag: added an upper bound that isn't in the spec
+      - rules:
+          - match: '^while\s*\(\s*cont\s*==\s*1\s*\)\s*;?$'
+          - match: '^while\s*\(\s*cont\s*!=\s*2\s*\)\s*;?$'
+            flag: equivalent only if cont is always 1 or 2
+      - '^i\s*<\s*counter$'
+      - ['^i\s*\+\+$', '^\+\+\s*i$', '^i\s*\+=\s*1$', '^i\s*=\s*i\s*\+\s*1$']
+
+  # Q36 / Q37: short essays. Keep the Canvas score, but flag answers missing the key idea
+  # so they show up under "Needs review".
+  "93904":
+    rules:
+      - match: 'no(thing)? (value|return)|n.?t return|does not return|nothing to return|returns? nothing'
+        score: keep
+    otherwise:
+      score: keep
+      flag: doesn't say the function returns nothing
+
+  "93911":
+    rules:
+      - match: 'modif|chang|updat|alter|more than one|two values|multiple values'
+        score: keep
+    otherwise:
+      score: keep
+      flag: doesn't say the function changes the caller's variables
