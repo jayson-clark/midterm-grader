@@ -23,14 +23,16 @@ export interface PlannedWrite {
   canvasScore: number | null;
   newScore: number | null;
   questions: QuestionChange[];
-  /** New Quizzes: optional submission comment summarizing the changes */
+  /** New Quizzes: whether the total score changes (false = comment only) */
+  setTotal?: boolean;
+  /** New Quizzes: submission comment (question comments, plus score changes if asked) */
   summaryComment?: string;
   /** why this student can't be written, if so */
   blocked?: string;
 }
 
 export interface WriteOptions {
-  /** New Quizzes: add a submission comment listing the per-question changes */
+  /** New Quizzes: also list the per-question score changes in the submission comment */
   summaryComment: boolean;
   /** only write students marked reviewed */
   onlyReviewed: boolean;
@@ -52,7 +54,7 @@ export function planWrites(quiz: QuizData, results: Map<string, StudentResult>, 
       if (c.score == null) continue;
       const comment = c.comments.join("\n").trim() || undefined;
       const scoreChanged = c.canvasPoints == null || Math.abs(c.score - c.canvasPoints) > 1e-3;
-      if (!scoreChanged && !(quiz.source === "classic" && comment)) continue;
+      if (!scoreChanged && !comment) continue;
       questions.push({ questionId: c.questionId, position: qpos.get(c.questionId) ?? 0, from: c.canvasPoints, to: c.score, comment });
     }
     questions.sort((a, b) => a.position - b.position);
@@ -61,14 +63,18 @@ export function planWrites(quiz: QuizData, results: Map<string, StudentResult>, 
     if (quiz.source === "classic") {
       if (!s.quizSubmissionId) w.blocked = "quiz submission not found";
     } else {
+      // New Quizzes has no per-question comments, so they all go into one submission comment.
+      const totalChanged = r.newScore != null && s.canvasScore != null && Math.abs(r.newScore - s.canvasScore) >= 1e-3;
+      const notes = questions.filter((q) => q.comment).map((q) => `Q${q.position}: ${q.comment}`);
+      const changes = questions.filter((q) => q.from == null || Math.abs(q.to - q.from) > 1e-3);
+      if (!totalChanged && !notes.length) continue; // score changes cancel out and nothing to say
       if (r.newScore == null || s.canvasScore == null) w.blocked = "total score unknown";
-      else if (Math.abs(r.newScore - s.canvasScore) < 1e-3) continue; // changes cancel out
-      if (opts.summaryComment) {
-        w.summaryComment = "Regraded: " + questions
-          .filter((q) => q.from == null || Math.abs(q.to - q.from) > 1e-3)
-          .map((q) => `Q${q.position} ${fmt(q.from)} → ${fmt(q.to)}${q.comment ? ` (${q.comment})` : ""}`)
-          .join("; ") + `. Total ${fmt(s.canvasScore)} → ${fmt(r.newScore)}.`;
+      w.setTotal = totalChanged;
+      const lines = [...notes];
+      if (opts.summaryComment && totalChanged && changes.length) {
+        lines.push(`Score changes: ${changes.map((q) => `Q${q.position} ${fmt(q.from)} → ${fmt(q.to)}`).join(", ")}. Total ${fmt(s.canvasScore)} → ${fmt(r.newScore)}.`);
       }
+      if (lines.length) w.summaryComment = lines.join("\n");
     }
     out.push(w);
   }
@@ -131,13 +137,15 @@ export async function executeWrites(
       } else {
         const now = current.get(p.userId);
         if (now === undefined) throw new Error("no submission on Canvas for this student");
-        if (now == null || p.canvasScore == null || Math.abs(now - p.canvasScore) > 1e-3) {
+        if (p.setTotal && (now == null || p.canvasScore == null || Math.abs(now - p.canvasScore) > 1e-3)) {
           throw new Error(`Canvas score changed since the report was exported (report ${fmt(p.canvasScore)}, Canvas now ${fmt(now)}). Re-export the report.`);
         }
-        const body: Record<string, unknown> = { submission: { posted_grade: String(p.newScore) } };
+        const body: Record<string, unknown> = {};
+        if (p.setTotal) body.submission = { posted_grade: String(p.newScore) };
         if (p.summaryComment) body.comment = { text_comment: p.summaryComment };
         await api(`/courses/${quiz.courseId}/assignments/${quiz.assignmentId}/submissions/${p.userId}`, { method: "PUT", body });
-        res = { userId: p.userId, name: p.name, ok: true, message: `Total ${fmt(p.canvasScore)} → ${fmt(p.newScore)}` };
+        const what = [p.setTotal ? `Total ${fmt(p.canvasScore)} → ${fmt(p.newScore)}` : "", p.summaryComment ? "comment added" : ""].filter(Boolean);
+        res = { userId: p.userId, name: p.name, ok: true, message: what.join("; ") };
       }
     } catch (e) {
       res = { userId: p.userId, name: p.name, ok: false, message: (e as Error).message };

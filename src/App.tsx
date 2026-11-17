@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { loadSettings, type AssignmentInfo, type Course, type PublicSettings } from "./lib/canvas";
 import type { QuizData } from "./lib/types";
 import { AssignmentsScreen, ClassicLoadScreen, ConnectScreen, CoursesScreen, CsvLoadScreen } from "./screens/Setup";
-import { Workspace } from "./screens/Workspace";
+import { Workspace, type Mode } from "./screens/Workspace";
 import { Logo, Spinner } from "./components/ui";
 
 type View = "connect" | "courses" | "assignments" | "load" | "workspace";
@@ -15,6 +15,13 @@ export default function App() {
   const [course, setCourse] = useState<Course | null>(null);
   const [assignment, setAssignment] = useState<AssignmentInfo | null>(null);
   const [quiz, setQuiz] = useState<QuizData | null>(null);
+  const [mode, setModeState] = useState<Mode>(() => {
+    try { return localStorage.getItem("mg:mode") === "author" ? "author" : "grade"; } catch { return "grade"; }
+  });
+  const setMode = (m: Mode) => {
+    setModeState(m);
+    try { localStorage.setItem("mg:mode", m); } catch { /* not fatal */ }
+  };
 
   useEffect(() => {
     loadSettings()
@@ -53,6 +60,11 @@ export default function App() {
             </span>
           ))}
         </nav>
+        <span className="spacer" />
+        <div className="seg" title="Grade: load a rubric and use it. Edit rubrics: write and test rubrics.">
+          <button className={mode === "grade" ? "on" : ""} onClick={() => setMode("grade")}>Grade</button>
+          <button className={mode === "author" ? "on" : ""} onClick={() => setMode("author")}>Edit rubrics</button>
+        </div>
       </header>
 
       {!booted ? (
@@ -72,7 +84,7 @@ export default function App() {
           <ClassicLoadScreen course={course} assignment={assignment} onLoaded={(q) => { setQuiz(q); setView("workspace"); }} />
         ) : null
       ) : view === "workspace" && quiz ? (
-        <Workspace key={`${quiz.source}:${quiz.assignmentId ?? quiz.title}`} quiz={quiz} />
+        <Workspace key={`${quiz.source}:${quiz.assignmentId ?? quiz.title}`} quiz={quiz} mode={mode} />
       ) : null}
     </div>
   );

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { gradeAll, gradeQuestion } from "./grader";
-import { parseRubric, resolveSpecs } from "./rubric";
+import { gradeAll, gradeQuestion, overrideKey } from "./grader";
+import { planWrites } from "./writeback";
+import { describeSpec, parseRubric, resolveSpecs } from "./rubric";
 import { parseStudentAnalysisCsv } from "./sources/newQuizzesCsv";
 import { splitTopLevel, toCsv } from "./text";
 import type { Question, Response } from "./types";
@@ -147,6 +148,22 @@ questions:
 });
 
 describe("rubric validation", () => {
+  it("reads author notes and describes specs", () => {
+    const { rubric, problems } = parseRubric(`notes: |\n  Be generous.\nquestions:\n  Q2:\n    note: check units\n    blanks: ['^3$', '^1$', '^2\\.9']\n  Q1: { use: canvas }\n`);
+    expect(problems).toEqual([]);
+    expect(rubric!.notes).toBe("Be generous.");
+    const { specs } = resolveSpecs(rubric!, quiz.questions);
+    expect(specs.get("102")!.note).toBe("check units");
+    expect(describeSpec(specs.get("102")!)).toBe("checks 3 blanks against the answer key");
+    expect(describeSpec(specs.get("101")!)).toBe("Keeps the Canvas score");
+  });
+
+  it("treats an all-commented questions: section as empty", () => {
+    const { rubric, problems } = parseRubric(`version: 1\nquestions:\n  # Q1: { answer: x }\n`);
+    expect(problems).toEqual([]);
+    expect(rubric!.questionKeys).toEqual([]);
+  });
+
   it("reports bad regexes, unknown keys and unknown questions with lines", () => {
     const { rubric, problems } = parseRubric(`questions:\n  Q1:\n    answr: x\n    rules:\n      - match: '(['\n  Q99: { answer: x }\n`);
     expect(problems.some((p) => p.message.includes("invalid regex") && p.line === 5)).toBe(true);
@@ -162,5 +179,51 @@ describe("rubric validation", () => {
     expect(gradeQuestion(q, spec(`questions:\n  "1": { answer: '^remainder$' }`), resp).score).toBe(1);
     expect(gradeQuestion(q, spec(`settings: { case_sensitive: true }\nquestions:\n  "1": { answer: '^remainder$' }`), resp).score).toBe(0);
     expect(gradeQuestion(q, spec(`settings: { case_sensitive: true }\nquestions:\n  "1": { answer: '/^remainder$/i' }`), resp).score).toBe(1);
+  });
+});
+
+describe("New Quizzes writeback plan", () => {
+  const { rubric } = parseRubric(`questions:\n  Q1:\n    answer: '^remainder$'\n    otherwise: { score: 0, comment: '% gives the remainder' }\n`);
+  const { specs } = resolveSpecs(rubric!, quiz.questions);
+  const opts = { summaryComment: false, onlyReviewed: false, reviewed: new Set<string>() };
+
+  it("sends rubric comments even without the score summary", () => {
+    // Turing already had 0 on Q1: score unchanged, but the rubric comment still goes out.
+    const plan = planWrites(quiz, gradeAll(quiz, specs), opts);
+    expect(plan.map((p) => p.userId)).toEqual(["2"]);
+    expect(plan[0].setTotal).toBe(false);
+    expect(plan[0].summaryComment).toBe("Q1: % gives the remainder");
+  });
+
+  it("sends override comments on questions not in the rubric, with score summary when asked", () => {
+    const res = gradeAll(quiz, specs, { [overrideKey("3", "103")]: { score: 1, comment: "partial credit" } });
+    const plan = planWrites(quiz, res, { ...opts, summaryComment: true });
+    const hopper = plan.find((p) => p.userId === "3")!;
+    expect(hopper.setTotal).toBe(true);
+    expect(hopper.newScore).toBe(10);
+    expect(hopper.summaryComment).toBe("Q3: partial credit\nScore changes: Q3 0 → 1. Total 9 → 10.");
+  });
+});
+
+describe("ordering questions", () => {
+  const q: Question = { id: "9", position: 9, kind: "ordering", rawType: "ordering", text: "", pointsPossible: 5, pointsSource: "inferred", blankIds: [], choices: [] };
+  const resp = (order: string[]): Response => ({ questionId: "9", text: order.join("\n\n"), parts: order, canvasPoints: 2, answered: true });
+  const spec = (scoring: string) => resolveSpecs(parseRubric(`questions:\n  "9":\n    scoring: ${scoring}\n    order: ['^a', '^b', '^c', '^d', '^e']\n`).rubric!, [q]).specs.get("9");
+  const moved = ["a", "c", "d", "e", "b"]; // b dragged to the end
+
+  it("position: a point per piece in its spot", () => {
+    const c = gradeQuestion(q, spec("position"), resp(moved));
+    expect(c.score).toBe(1);
+    expect(c.parts!.map((p) => p.score)).toEqual([1, 0, 0, 0, 0]);
+  });
+  it("sequence: longest run in the right order", () => {
+    const c = gradeQuestion(q, spec("sequence"), resp(moved));
+    expect(c.score).toBe(4);
+    expect(c.parts!.map((p) => p.matched[0])).toEqual(["piece 1, in order", "piece 3, in order", "piece 4, in order", "piece 5, in order", "piece 2, out of order"]);
+  });
+  it("flags pieces it can't identify", () => {
+    const c = gradeQuestion(q, spec("position"), resp(["a", "b", "zz", "d", "e"]));
+    expect(c.score).toBe(4);
+    expect(c.flags).toEqual(["piece 3 doesn't match any pattern under order:"]);
   });
 });

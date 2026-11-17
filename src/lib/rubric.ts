@@ -50,13 +50,27 @@ export interface QuestionSpec extends PartSpec {
   /** `use: canvas`: listed but deliberately left alone */
   keep: boolean;
   blanks: PartSpec[] | Record<string, PartSpec> | null;
+  /** ordering questions: one pattern per piece, in the correct order */
+  order: PartSpec[] | null;
+  orderScoring: OrderScoring;
   options: Options;
   /** where the spec came from, for the UI */
   origin: string;
+  /** author's note for graders (`note:` on the question) */
+  note?: string;
 }
+
+/**
+ * position: credit for each piece in its correct spot.
+ * sequence: credit for the longest run of pieces in the correct relative order (gaps allowed),
+ *           so moving one piece costs one piece, not everything after it.
+ */
+export type OrderScoring = "position" | "sequence";
 
 export interface Rubric {
   title: string;
+  /** author's instructions for graders (top-level `notes:`) */
+  notes: string;
   options: Options;
   /** keyed by Kind */
   types: Partial<Record<Kind, QuestionSpec>>;
@@ -109,7 +123,7 @@ const DEFAULT_OPTIONS: Options = { caseSensitive: false, whitespace: "lines", bl
 
 const SETTINGS_KEYS = ["case_sensitive", "whitespace", "blank_answers"];
 const SPEC_KEYS = [
-  "points", "use", "answer", "rules", "mode", "start", "otherwise", "blanks", "label", "note",
+  "points", "use", "answer", "rules", "mode", "start", "otherwise", "blanks", "order", "scoring", "label", "note",
   ...SETTINGS_KEYS,
 ];
 const PART_KEYS = ["points", "answer", "rules", "mode", "start", "otherwise", "label", "note", "case_sensitive", "whitespace"];
@@ -408,7 +422,7 @@ function parsePart(ctx: Ctx, path: (string | number)[], raw: unknown, opts: Opti
 function parseSpec(ctx: Ctx, path: (string | number)[], raw: unknown, opts: Options, origin: string): QuestionSpec | null {
   if (typeof raw === "string" || Array.isArray(raw)) {
     const p = parsePart(ctx, path, raw, opts, PART_KEYS);
-    return p ? { ...p, keep: false, blanks: null, options: opts, origin } : null;
+    return p ? { ...p, keep: false, blanks: null, order: null, orderScoring: "position", options: opts, origin } : null;
   }
   if (!isObj(raw)) {
     ctx.error(path, "expected a mapping (points, answer, rules, blanks, ...)");
@@ -437,10 +451,26 @@ function parseSpec(ctx: Ctx, path: (string | number)[], raw: unknown, opts: Opti
       blanks = map;
     } else ctx.error([...path, "blanks"], "expected a list (in blank order) or a mapping of blank name -> rules");
   }
-  if (!keep && !blanks && !base.rules.length) {
-    ctx.warn(path, "no answer, rules or blanks: every answer will get the `otherwise` score");
+  let order: PartSpec[] | null = null;
+  if (raw.order !== undefined) {
+    if (base.rules.length || blanks) ctx.error(path, "use order on its own, not with answer/rules/blanks");
+    if (!Array.isArray(raw.order) || raw.order.length < 2) ctx.error([...path, "order"], "expected a list of at least 2 patterns, one per piece, in the correct order");
+    else {
+      order = [];
+      raw.order.forEach((b, i) => { const p = parsePart(ctx, [...path, "order", i], b, options, PART_KEYS); if (p) order!.push(p); });
+    }
   }
-  return { ...base, keep, blanks, options, origin };
+  let orderScoring: OrderScoring = "position";
+  if (raw.scoring !== undefined) {
+    if (raw.scoring !== "position" && raw.scoring !== "sequence") ctx.error([...path, "scoring"], 'expected "position" or "sequence"');
+    else orderScoring = raw.scoring;
+    if (!order) ctx.warn([...path, "scoring"], "scoring only applies together with order:");
+  }
+  if (!keep && !blanks && !order && !base.rules.length) {
+    ctx.warn(path, "no answer, rules, blanks or order: every answer will get the `otherwise` score");
+  }
+  const note = typeof raw.note === "string" ? raw.note.trim() : undefined;
+  return { ...base, keep, blanks, order, orderScoring, options, origin, note };
 }
 
 export function parseRubric(text: string): ParseResult {
@@ -459,7 +489,7 @@ export function parseRubric(text: string): ParseResult {
   }
   if (raw == null) raw = {};
   if (!isObj(raw)) return { rubric: null, problems: [{ level: "error", message: "The rubric must be a YAML mapping (version, settings, types, questions)." }] };
-  checkKeys(ctx, [], raw, ["version", "title", "settings", "types", "questions"]);
+  checkKeys(ctx, [], raw, ["version", "title", "notes", "settings", "types", "questions"]);
   if (raw.version !== undefined && raw.version !== 1) ctx.warn(["version"], "this app understands version 1");
 
   let options = DEFAULT_OPTIONS;
@@ -498,7 +528,7 @@ export function parseRubric(text: string): ParseResult {
     }
   }
   return {
-    rubric: { title: typeof raw.title === "string" ? raw.title : "", options, types, questions, questionKeys },
+    rubric: { title: typeof raw.title === "string" ? raw.title : "", notes: typeof raw.notes === "string" ? raw.notes.trim() : "", options, types, questions, questionKeys },
     problems: ctx.problems,
   };
 }
@@ -535,13 +565,36 @@ export function resolveSpecs(rubric: Rubric, questions: Question[]): { specs: Ma
     if (s.points == null && q.pointsPossible == null) {
       problems.push({ level: "warning", message: `Q${q.position}: max points unknown; set points: in the rubric so "full" and percentages work` });
     }
+    if (s.order && q.kind !== "ordering") {
+      problems.push({ level: "warning", message: `Q${q.position}: order: only works on ordering questions (this is ${q.kind})` });
+    }
     if (s.blanks) {
-      if (q.kind !== "fill_blank" && q.kind !== "dropdown" && q.kind !== "multi_answer" && q.kind !== "ordering") {
+      if (q.kind !== "fill_blank" && q.kind !== "dropdown") {
         problems.push({ level: "warning", message: `Q${q.position}: blanks: used on a ${q.kind} question` });
-      } else if (Array.isArray(s.blanks) && q.blankIds.length && s.blanks.length !== q.blankIds.length && q.kind !== "multi_answer" && q.kind !== "ordering") {
+      } else if (Array.isArray(s.blanks) && q.blankIds.length && s.blanks.length !== q.blankIds.length) {
         problems.push({ level: "warning", message: `Q${q.position}: rubric lists ${s.blanks.length} blanks but the question has ${q.blankIds.length}` });
       }
     }
   }
   return { specs, problems };
+}
+
+/** One-line, plain-English summary of how a question is graded. */
+export function describeSpec(spec: QuestionSpec): string {
+  if (spec.keep) return "Keeps the Canvas score";
+  const pts = spec.points != null ? `${spec.points} pts · ` : "";
+  if (spec.order) {
+    const n = spec.order.length;
+    return spec.orderScoring === "sequence"
+      ? `${pts}${n} pieces; credit for the longest run in the right order`
+      : `${pts}${n} pieces; credit for each piece in its right spot`;
+  }
+  if (spec.blanks) {
+    const n = Array.isArray(spec.blanks) ? spec.blanks.length : Object.keys(spec.blanks).length;
+    return `${pts}checks ${n} blank${n === 1 ? "" : "s"} against the answer key`;
+  }
+  const keeps = spec.rules.length > 0 && spec.rules.every((r) => r.score.kind === "keep") && spec.otherwise.score.kind === "keep";
+  if (keeps) return `${pts}keeps the Canvas score; flags answers for review`;
+  const how = spec.mode === "sum" ? "adds up points per matching rule" : spec.mode === "max" ? "best matching rule" : "first matching rule";
+  return `${pts}${spec.rules.length} rule${spec.rules.length === 1 ? "" : "s"} (${how})`;
 }

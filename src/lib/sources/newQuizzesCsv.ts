@@ -46,6 +46,21 @@ function mode(values: number[]): number {
   return best;
 }
 
+/**
+ * Ordering answers look like "<div …>chunk 1</div>","<div …>chunk 2</div>": each item in
+ * double quotes, joined by commas, with the quotes inside the HTML left unescaped. Split only
+ * where one item's markup ends and the next begins (>","<), so code containing "," survives.
+ */
+export function splitQuotedItems(raw: string): string[] {
+  const s = raw.trim();
+  if (s.length >= 2 && s.startsWith('"') && s.endsWith('"')) {
+    const inner = s.slice(1, -1);
+    const html = /^\s*</.test(inner);
+    return inner.split(html ? /(?<=>)\s*","\s*(?=<)/ : /","/);
+  }
+  return splitTopLevel(s);
+}
+
 function parseResponse(q: Question, raw: string, earned: number | null): Response {
   const base: Response = { questionId: q.id, text: "", raw, canvasPoints: earned, answered: raw.trim() !== "" };
   if (!base.answered) return base;
@@ -68,9 +83,9 @@ function parseResponse(q: Question, raw: string, earned: number | null): Respons
     case "ordering":
     case "matching":
     case "categorization": {
-      const items = raw.trimStart().startsWith('"') ? parseCsv(raw)[0] ?? [] : splitTopLevel(raw);
+      const items = splitQuotedItems(raw);
       const parts = items.map((p) => htmlToText(p).trim());
-      return { ...base, parts, text: parts.join("\n") };
+      return { ...base, parts, text: parts.join("\n\n") };
     }
     default:
       return { ...base, text: htmlToText(raw) };

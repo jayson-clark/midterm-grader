@@ -149,6 +149,9 @@ function QuestionCard({ ctx, q, s, cell, resp }: { ctx: WorkspaceCtx; q: Questio
       </div>
       <div className="qcard-body">
         <div className={`prompt ${promptOpen ? "open" : ""}`} onClick={() => setPromptOpen(!promptOpen)} title="Click to expand">{q.text}</div>
+        {ctx.specs.get(q.id)?.note && (
+          <div className="notice info small"><span className="muted">Rubric author: </span>{ctx.specs.get(q.id)!.note}</div>
+        )}
 
         {cell.parts ? (
           <table className="grid" style={{ border: "1px solid var(--line)", borderRadius: 6 }}>
@@ -184,7 +187,7 @@ function QuestionCard({ ctx, q, s, cell, resp }: { ctx: WorkspaceCtx; q: Questio
           <span className="small muted">Override</span>
           <input type="number" step="any" placeholder={fmt(cell.score)} value={score}
             onChange={(e) => setScore(e.target.value)} onBlur={() => commit()} onKeyDown={(e) => e.key === "Enter" && commit()} />
-          <input type="text" placeholder="Comment for the student (optional)" value={comment}
+          <input type="text" placeholder={ctx.quiz.source === "classic" ? "Comment on this question for the student (optional)" : "Comment for the student (optional, sent as a submission comment)"} value={comment}
             onChange={(e) => setComment(e.target.value)} onBlur={() => commit()} onKeyDown={(e) => e.key === "Enter" && commit()} />
           {ov && <button className="btn sm ghost" onClick={() => { setScore(""); setComment(""); ctx.setOverride(s.userId, q.id, null); }}>Clear</button>}
         </div>

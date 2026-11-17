@@ -37,9 +37,42 @@ function pointsLine(q: Question): string {
   return `    points: ${+q.pointsPossible.toFixed(4)}${tag}`;
 }
 
+/**
+ * Correct order for an ordering question, from the students Canvas gave full credit:
+ * one pattern per piece, built from a line no other piece contains.
+ */
+function orderPatterns(quiz: QuizData, q: Question): string[] | null {
+  const max = q.pointsPossible;
+  if (!max) return null;
+  const counts = new Map<string, { parts: string[]; n: number }>();
+  for (const s of quiz.students) {
+    const r = s.responses[q.id];
+    if (!r?.parts?.length || r.canvasPoints == null || Math.abs(r.canvasPoints - max) > 1e-3) continue;
+    const k = JSON.stringify(r.parts);
+    counts.set(k, { parts: r.parts, n: (counts.get(k)?.n ?? 0) + 1 });
+  }
+  const best = [...counts.values()].sort((a, b) => b.n - a.n)[0];
+  if (!best) return null;
+  const lines = best.parts.map((p) => p.split("\n").map((l) => squash(l)).filter(Boolean));
+  return lines.map((ls, i) => {
+    const others = new Set(lines.filter((_, j) => j !== i).flat());
+    const pick = ls.find((l) => !others.has(l) && l.length > 3) ?? ls.find((l) => !others.has(l)) ?? ls[0] ?? "";
+    // whole-line match (m flag), so "else" doesn't also match "else if (...)"
+    return `/${looseRegex(pick)}/m`;
+  });
+}
+
 function example(quiz: QuizData, q: Question): string[] {
   const L: string[] = [pointsLine(q)];
   switch (q.kind) {
+    case "ordering": {
+      const pats = orderPatterns(quiz, q);
+      L.push("    scoring: position     # position: points per piece in its right spot | sequence: longest run in the right order");
+      L.push(`    order:${pats ? "                # from the order students with full credit used" : ""}`);
+      if (pats) pats.forEach((p, i) => L.push(`      - ${q1(p)}   # piece ${i + 1}`));
+      else L.push("      - 'a line only the first piece contains'", "      - 'a line only the second piece contains'");
+      break;
+    }
     case "fill_blank":
     case "dropdown": {
       L.push("    blanks:");
@@ -80,6 +113,10 @@ export function buildTemplate(quiz: QuizData): string {
     "",
     "version: 1",
     `title: ${q1(quiz.title)}`,
+    "",
+    "# Instructions shown to graders who load this rubric:",
+    "notes: |",
+    "  Review everything flagged before sending.",
     "",
     "settings:",
     "  case_sensitive: false   # regexes ignore case unless written /like this/ with flags",

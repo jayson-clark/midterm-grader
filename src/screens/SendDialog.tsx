@@ -102,7 +102,8 @@ export function SendDialog({ ctx, onClose }: { ctx: WorkspaceCtx; onClose: () =>
           <div className="col small">
             <label className="row"><input type="checkbox" checked={onlyReviewed} onChange={(e) => setOnlyReviewed(e.target.checked)} /> Only send students marked reviewed ({reviewed.size})</label>
             {!onlyReviewed && unreviewedChanged > 0 && <div className="faint" style={{ marginLeft: 22 }}>{unreviewedChanged} regraded student(s) haven't been reviewed.</div>}
-            {nq && <label className="row"><input type="checkbox" checked={summaryComment} onChange={(e) => setSummaryComment(e.target.checked)} /> Add a submission comment listing the per-question changes (visible to the student once grades are posted)</label>}
+            {nq && <div className="faint" style={{ marginLeft: 0 }}>Comments from the rubric or your overrides are sent as one submission comment per student (New Quizzes has no per-question comments). Students see it once grades are posted.</div>}
+            {nq && <label className="row"><input type="checkbox" checked={summaryComment} onChange={(e) => setSummaryComment(e.target.checked)} /> Also list the per-question score changes in that comment</label>}
           </div>
 
           <div className="card" style={{ maxHeight: 280, overflow: "auto" }}>
@@ -112,7 +113,11 @@ export function SendDialog({ ctx, onClose }: { ctx: WorkspaceCtx; onClose: () =>
                 {plan.map((p) => (
                   <tr key={p.userId}>
                     <td className="nowrap">{p.name}{p.blocked && <div className="small error-text">{p.blocked}</div>}</td>
-                    <td className="small">{p.questions.map((q) => `Q${q.position}: ${fmt(q.from)}→${fmt(q.to)}`).join(", ")}</td>
+                    <td className="small">
+                      {p.questions.filter((q) => q.from == null || Math.abs(q.to - q.from) > 1e-3).map((q) => `Q${q.position}: ${fmt(q.from)}→${fmt(q.to)}`).join(", ")}
+                      {p.summaryComment && <div className="muted" style={{ whiteSpace: "pre-wrap", marginTop: 2 }}>💬 {p.summaryComment}</div>}
+                      {!p.summaryComment && p.questions.some((q) => q.comment) && <div className="muted" style={{ marginTop: 2 }}>💬 {p.questions.filter((q) => q.comment).map((q) => `Q${q.position}: ${q.comment}`).join(" · ")}</div>}
+                    </td>
                     <td className="right"><ScoreChange from={p.canvasScore} to={p.newScore} /></td>
                   </tr>
                 ))}

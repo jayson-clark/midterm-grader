@@ -1,0 +1,34 @@
+# MT 02 2025 (AU25): the Parsons problem only (Q32, 10 pts).
+#
+# Students drag 10 chunks of a C program into order. Each pattern under `order:` identifies
+# one chunk (by a line only that chunk contains), listed in the correct order. The correct
+# order matches the 28 students Canvas gave full credit.
+#
+# scoring: position  → 1 pt for each chunk in its correct spot (what Canvas already does).
+# scoring: sequence  → 1 pt for each chunk in the longest run that's in the right relative
+#                      order, so moving one chunk costs 1 pt instead of every chunk after it.
+#
+# Every other question keeps its Canvas score and is never sent.
+
+version: 1
+title: MT 02 2025 – Parsons problem
+
+notes: |
+  Only Q32 (Parsons) is regraded. Partial credit: 1 point per chunk.
+
+questions:
+  "93838":
+    points: 10
+    scoring: position
+    note: One point per chunk. Flagged answers have a chunk the rubric didn't recognize.
+    order:
+      - '#include\s*<stdio\.h>'                              # 1  includes, #defines, int main()
+      - 'char\s+team_name'                                   # 2  { declarations
+      - 'fopen\s*\(\s*"wnba_teams\.txt"'                     # 3  open file, init, for loop
+      - 'fscanf\s*\(\s*team_ptr'                             # 4  read a team; WINNING record
+      - 'LOSING record'                                      # 5  else if: LOSING record
+      - 'EVEN record'                                        # 6  else: EVEN record
+      - 'team_percent\s*=\s*team_wins\s*/\s*NUM_GAMES'       # 7  percent; if (>= max)
+      - '^\{\s*max_percent\s*=\s*team_percent'               # 8  { new max }
+      - 'min_percent\s*=\s*team_percent'                     # 9  else if: new min; end loop
+      - 'fclose\s*\(\s*team_ptr\s*\)'                        # 10 print best/worst, fclose, }

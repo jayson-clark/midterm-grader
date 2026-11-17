@@ -1,8 +1,8 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
-import { save } from "@tauri-apps/plugin-dialog";
-import { writeTextFile } from "../lib/canvas";
+import { open, save } from "@tauri-apps/plugin-dialog";
+import { readTextFile, writeTextFile } from "../lib/canvas";
 import { gradeAll, overrideKey, type Override, type Overrides, type StudentResult } from "../lib/grader";
-import { parseRubric, resolveSpecs, type Problem, type QuestionSpec } from "../lib/rubric";
+import { parseRubric, resolveSpecs, type ParseResult, type Problem, type QuestionSpec } from "../lib/rubric";
 import { toCsv } from "../lib/text";
 import type { QuizData } from "../lib/types";
 import { fmt, ScoreChange } from "../components/ui";
@@ -10,8 +10,16 @@ import { RubricTab } from "./RubricTab";
 import { AnswersTab } from "./AnswersTab";
 import { ReviewTab } from "./ReviewTab";
 import { SendDialog } from "./SendDialog";
+import { GradeOverview, RubricPicker } from "./GradeOverview";
 
-export type Tab = "rubric" | "answers" | "review" | "gradebook";
+export type Mode = "grade" | "author";
+export type Tab = "overview" | "rubric" | "answers" | "review" | "gradebook";
+
+const TABS: Record<Mode, Tab[]> = {
+  grade: ["overview", "review", "gradebook"],
+  author: ["rubric", "answers", "review", "gradebook"],
+};
+const TAB_LABEL: Record<Tab, string> = { overview: "Overview", rubric: "Rubric", answers: "Answers", review: "Review", gradebook: "Gradebook" };
 
 export interface WorkspaceCtx {
   quiz: QuizData;
@@ -45,9 +53,23 @@ version: 1
 questions:
 `;
 
-export function Workspace({ quiz }: { quiz: QuizData }) {
+export interface RubricState {
+  text: string;
+  path: string | null;
+  parsed: ParseResult;
+  problems: Problem[];
+  hasErrors: boolean;
+  /** draft differs from the file on disk */
+  dirty: boolean;
+  loading: boolean;
+  loadError: string | null;
+  choose: () => Promise<void>;
+  reload: () => Promise<void>;
+}
+
+export function Workspace({ quiz, mode }: { quiz: QuizData; mode: Mode }) {
   const saved = useMemo(() => load(quiz), [quiz]);
-  const [tab, setTab] = useState<Tab>("rubric");
+  const [tab, setTab] = useState<Tab>(mode === "grade" ? "overview" : "rubric");
   const [rubricText, setRubricText] = useState(saved.rubricText ?? STARTER);
   const [rubricPath, setRubricPath] = useState<string | null>(saved.rubricPath ?? null);
   const [savedText, setSavedText] = useState<string | null>(saved.rubricPath ? (saved.rubricText ?? null) : null);
@@ -55,6 +77,35 @@ export function Workspace({ quiz }: { quiz: QuizData }) {
   const [reviewed, setReviewedSet] = useState<Set<string>>(new Set(saved.reviewed ?? []));
   const [sel, setSel] = useState<{ questionId?: string; userId?: string }>({});
   const [sending, setSending] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  const readRubric = useCallback(async (p: string) => {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const t = await readTextFile(p);
+      setRubricText(t); setRubricPath(p); setSavedText(t);
+    } catch (e) {
+      setLoadError(`Couldn't open ${p.split(/[\\/]/).pop()}: ${String(e)}`);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+  const chooseRubric = useCallback(async () => {
+    const p = await open({ multiple: false, filters: [{ name: "Rubric", extensions: ["yaml", "yml"] }] });
+    if (p && !Array.isArray(p)) await readRubric(p);
+  }, [readRubric]);
+  const reloadRubric = useCallback(async () => { if (rubricPath) await readRubric(rubricPath); }, [rubricPath, readRubric]);
+
+  // Graders always use the rubric file as it is on disk now, so an updated file is picked up.
+  useEffect(() => {
+    if (mode === "grade" && rubricPath) void readRubric(rubricPath);
+  }, [mode]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!TABS[mode].includes(tab)) setTab(mode === "grade" ? "overview" : "rubric");
+  }, [mode, tab]);
 
   useEffect(() => {
     const t = setTimeout(() => {
@@ -104,7 +155,8 @@ export function Workspace({ quiz }: { quiz: QuizData }) {
     const v = all.map((r) => r[k]).filter((x): x is number => x != null);
     return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
   };
-  const canSend = !!quiz.courseId && !!quiz.assignmentId && !hasErrors && changed > 0;
+  const hasComments = all.some((r) => Object.values(r.cells).some((c) => (c.status === "graded" || c.status === "override") && c.comments.length > 0));
+  const canSend = !!quiz.courseId && !!quiz.assignmentId && !hasErrors && (changed > 0 || hasComments);
 
   async function exportCsv() {
     const p = await save({ defaultPath: `${quiz.title.replace(/[^\w.-]+/g, "_")}_grades.csv`, filters: [{ name: "CSV", extensions: ["csv"] }] });
@@ -125,14 +177,26 @@ export function Workspace({ quiz }: { quiz: QuizData }) {
     await writeTextFile(p, toCsv([header, ...rows]));
   }
 
+  const problems = [...parsed.problems, ...resolved.problems];
+  const rubric: RubricState = {
+    text: rubricText, path: rubricPath, parsed, problems, hasErrors,
+    dirty: savedText !== rubricText, loading, loadError, choose: chooseRubric, reload: reloadRubric,
+  };
+  const needsRubric = mode === "grade" && !rubricPath && resolved.specs.size === 0;
+  const sendTitle = !quiz.courseId ? "Offline: not connected to a Canvas assignment" : hasErrors ? "The rubric has errors" : changed === 0 && !hasComments ? "Nothing to send" : "";
+
+  if (needsRubric) {
+    return <div className="main"><RubricPicker quiz={quiz} rubric={rubric} /></div>;
+  }
+
   return (
     <div className="main">
       <div className="ws-head">
         <div className="tabs">
-          {(["rubric", "answers", "review", "gradebook"] as Tab[]).map((t) => (
+          {TABS[mode].map((t) => (
             <button key={t} className={`tab ${tab === t ? "active" : ""}`} onClick={() => setTab(t)}>
-              {t === "rubric" ? "Rubric" : t === "answers" ? "Answers" : t === "review" ? "Review" : "Gradebook"}
-              {t === "rubric" && hasErrors && <span className="dot flag" />}
+              {TAB_LABEL[t]}
+              {(t === "rubric" || t === "overview") && hasErrors && <span className="dot flag" />}
               {t === "review" && <span className="faint small">{reviewed.size}/{quiz.students.length}</span>}
             </button>
           ))}
@@ -146,15 +210,17 @@ export function Workspace({ quiz }: { quiz: QuizData }) {
         </div>
         <div className="spacer" />
         <button className="btn" onClick={exportCsv}>Export CSV</button>
-        <button className="btn primary" disabled={!canSend} onClick={() => setSending(true)}
-          title={!quiz.courseId ? "Offline: not connected to a Canvas assignment" : hasErrors ? "Fix rubric errors first" : changed === 0 ? "Nothing to send" : ""}>
+        <button className="btn primary" disabled={!canSend} onClick={() => setSending(true)} title={sendTitle}>
           Send to Canvas…
         </button>
       </div>
       <div className="ws-body">
+        {tab === "overview" && (
+          <GradeOverview ctx={ctx} rubric={rubric} canSend={canSend} sendTitle={sendTitle} onSend={() => setSending(true)} onExport={exportCsv} />
+        )}
         {tab === "rubric" && (
           <RubricTab ctx={ctx} text={rubricText} setText={setRubricText} path={rubricPath} setPath={setRubricPath}
-            dirty={savedText !== rubricText} markSaved={setSavedText} problems={[...parsed.problems, ...resolved.problems]} />
+            dirty={savedText !== rubricText} markSaved={setSavedText} problems={problems} />
         )}
         {tab === "answers" && <AnswersTab ctx={ctx} questionId={sel.questionId} setQuestionId={(id) => setSel((s) => ({ ...s, questionId: id }))} />}
         {tab === "review" && <ReviewTab ctx={ctx} userId={sel.userId} setUserId={(id) => setSel((s) => ({ ...s, userId: id }))} />}

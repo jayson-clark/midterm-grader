@@ -161,6 +161,8 @@ export function gradeQuestion(q: Question, spec: QuestionSpec | undefined, resp:
 
   const ctx: MatchContext = { canvasPoints, max };
 
+  if (spec.order && q.kind === "ordering") return gradeOrder(spec, resp, cell, max);
+
   if (spec.blanks && (q.kind === "fill_blank" || q.kind === "dropdown")) {
     const parts = resp?.parts ?? [resp?.text ?? ""];
     if (resp?.partsMismatch) {
@@ -211,6 +213,70 @@ export function gradeQuestion(q: Question, spec: QuestionSpec | undefined, resp:
   return {
     ...cell, score: round(r.score), matched: r.matched, flags: r.flags, comments: r.comments,
     changed: canvasPoints == null || Math.abs(r.score - canvasPoints) > 1e-3,
+  };
+}
+
+/** Positions of the longest strictly increasing subsequence of ids (ignoring -1). */
+function longestInOrder(ids: number[]): Set<number> {
+  const len = ids.map(() => 0), prev = ids.map(() => -1);
+  let best = -1;
+  for (let i = 0; i < ids.length; i++) {
+    if (ids[i] < 0) continue;
+    len[i] = 1;
+    for (let j = 0; j < i; j++) {
+      if (ids[j] >= 0 && ids[j] < ids[i] && len[j] + 1 > len[i]) { len[i] = len[j] + 1; prev[i] = j; }
+    }
+    if (best < 0 || len[i] > len[best]) best = i;
+  }
+  const out = new Set<number>();
+  for (let i = best; i >= 0; i = prev[i]) out.add(i);
+  return out;
+}
+
+/** Ordering questions with `order:`: identify each piece, then score by position or sequence. */
+function gradeOrder(spec: QuestionSpec, resp: Response | undefined, cell: Cell, max: number | null): Cell {
+  const order = spec.order!;
+  const n = order.length;
+  const parts = (resp?.parts ?? []).map((p) => normalize(p, spec.options));
+  const noCtx: MatchContext = { canvasPoints: null, max: null };
+  const flags: string[] = [];
+  const ids = parts.map((t, i) => {
+    const hits = order.flatMap((item, k) => (item.rules.some((r) => { try { return r.test(t, noCtx); } catch { return false; } }) ? [k] : []));
+    if (hits.length === 0) flags.push(`piece ${i + 1} doesn't match any pattern under order:`);
+    if (hits.length > 1) flags.push(`piece ${i + 1} matches order items ${hits.map((h) => h + 1).join(" and ")}; make those patterns more specific`);
+    return hits.length === 1 ? hits[0] : -1;
+  });
+  if (parts.length !== n) flags.push(`the answer has ${parts.length} pieces but order: lists ${n}`);
+  const fixed = order.reduce((sum, p) => sum + (p.points ?? 0), 0);
+  const free = order.filter((p) => p.points == null).length;
+  if (max == null && free) flags.push("max points unknown: set points: in the rubric");
+  const share = max == null ? 0 : free ? Math.max(0, (max - fixed) / free) : 0;
+  const worth = (k: number) => order[k]?.points ?? share;
+
+  const sequence = spec.orderScoring === "sequence";
+  const credited = sequence ? longestInOrder(ids) : new Set(ids.flatMap((k, i) => (k === i ? [i] : [])));
+  const results: PartResult[] = parts.map((t, i) => {
+    const k = ids[i];
+    const ok = credited.has(i);
+    const firstLine = t.split("\n").find((l) => l.trim()) ?? "";
+    let why: string;
+    if (k < 0) why = "not recognized";
+    else if (ok) why = sequence ? `piece ${k + 1}, in order` : `piece ${k + 1}, right spot`;
+    else why = sequence ? `piece ${k + 1}, out of order` : `piece ${k + 1}, belongs in spot ${k + 1}`;
+    return {
+      label: `Spot ${i + 1}`, text: firstLine, score: ok && k >= 0 ? fine(worth(k)) : 0,
+      max: sequence ? (k >= 0 ? worth(k) : null) : worth(i), matched: [why], flags: [], comments: [],
+    };
+  });
+  let score = results.reduce((sum, p) => sum + p.score, 0);
+  if (max != null) score = Math.min(score, max);
+  score = round(score);
+  const okCount = [...credited].filter((i) => ids[i] >= 0).length;
+  return {
+    ...cell, score, parts: results,
+    matched: [`${okCount} of ${n} pieces ${sequence ? "in the right order" : "in the right spot"}`],
+    flags,
+    changed: cell.canvasPoints == null || Math.abs(score - cell.canvasPoints) > 1e-3,
   };
 }
 

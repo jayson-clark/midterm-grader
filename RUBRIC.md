@@ -12,6 +12,8 @@ distinct answer and how the current rubric scores it, updating as you type.
 ```yaml
 version: 1
 title: Midterm 2
+notes: |                    # shown to graders on the Overview screen
+  Flagged Q34 answers: accept any equivalent loop condition.
 
 settings:
   case_sensitive: false     # default
@@ -56,7 +58,9 @@ Canvas's own type names work too (`essay_question`, `rich-fill-blank`, …).
 | `start` | With `mode: sum`, the starting score, e.g. `start: full` and rules with negative `score` for deductions. |
 | `otherwise` | Score when no rule matches. Default `0`. Can be `{ score, comment, flag }`. |
 | `blanks` | For fill-in-the-blank / dropdown questions: rules per blank (see below). |
+| `order`, `scoring` | For ordering (Parsons) questions: one pattern per piece in the correct order, and `position` or `sequence` partial credit (see below). |
 | `use: canvas` | Listed, but keep Canvas's score (handy to mark "looked at, leave it"). |
+| `note` | A note for graders, shown next to this question in Grade mode and on every review card. |
 | `case_sensitive`, `whitespace`, `blank_answers` | Override the settings for this question. |
 
 ## Rules
@@ -123,6 +127,30 @@ answer it can't split into the right number of blanks (keeping Canvas's score fo
 
 The answer text is the selected / ordered items, one per line. Use `(?m)`-style line anchors
 via flags: `'/^int$/m'` checks that `int` was one of the picks.
+
+## Ordering (Parsons) questions
+
+List one pattern per piece **in the correct order**. Each pattern only has to identify its
+piece, so match a line no other piece contains. Then pick how partial credit works:
+
+```yaml
+Q32:
+  points: 10
+  scoring: position        # or: sequence
+  order:
+    - '#include\s*<stdio\.h>'
+    - 'char\s+team_name'
+    - 'fopen\s*\(\s*"wnba_teams\.txt"'
+    # ...one per piece
+```
+
+- `scoring: position`: each piece in its correct spot earns its share (points ÷ pieces, or a
+  piece's own `points:`).
+- `scoring: sequence`: credit for the longest run of pieces in the right relative order (gaps
+  allowed). Moving one piece to the wrong place costs that piece only, not everything after it.
+
+A piece that matches no pattern, or more than one, is flagged for review. **New from quiz**
+fills in `order:` automatically from the students who got full credit.
 
 ## Essays
 

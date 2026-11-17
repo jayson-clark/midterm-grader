@@ -14,7 +14,7 @@ rubric, see how every answer scores, review each submission, and send the result
 | | Classic quizzes | New Quizzes |
 | --- | --- | --- |
 | Where answers come from | Canvas API, automatically | The quiz's **Student Analysis** report (CSV) you export from Canvas |
-| What gets written back | Per-question scores, plus comments where your rubric adds one | The assignment's **total** score only |
+| What gets written back | Per-question scores, plus per-question comments where the rubric or a grader adds one | The assignment's **total** score, plus one **submission comment** collecting any rubric / grader comments ("Q34: …") |
 
 New Quizzes has no public API for students' answers or for per-question scores. For those,
 the new total is *Canvas total − Canvas points on rubric questions + rubric points*. The
@@ -41,26 +41,39 @@ npm test           # grading engine tests
 
 ## Using it
 
+The switch in the top bar picks one of two modes.
+
+### Grade (for most instructors)
+
 1. **Connect.** Paste your Canvas URL and an access token (Canvas → Account → Settings →
    *+ New Access Token*). The token is kept in the app's config folder on your computer and is
    only ever sent to that Canvas URL.
-2. **Pick a course** (any you teach or TA) and **a quiz**.
-3. **Load answers.** Classic quizzes load automatically; for a New Quiz, choose its Student
-   Analysis CSV. The app checks that the report's students and scores match Canvas.
-4. **Rubric tab.** Open a rubric file, or click **New from quiz** for a template listing every
-   question and the answers students gave. See [RUBRIC.md](RUBRIC.md) for the format and
-   [examples/](examples/) for a worked example. Errors and warnings show under the editor with line numbers.
-5. **Answers tab.** Every distinct answer to a question (or to each blank), how many students
-   gave it, the rubric score vs Canvas, and which rule decided. Click an answer to see who gave it.
-6. **Review tab.** One student at a time: their answer, the score change, and why. Override any
-   score or add a comment, then **Mark reviewed → next**. Keys: <kbd>j</kbd>/<kbd>k</kbd> next/previous,
-   <kbd>r</kbd> toggle reviewed.
-7. **Gradebook tab.** Everyone at a glance; click a row to review that student.
-8. **Send to Canvas…** Shows exactly what will change, can be limited to reviewed students,
-   saves a backup, makes sure grades stay hidden, and writes. Then post grades from Canvas when ready.
+2. **Pick a course and a quiz.** For a New Quiz, also choose its Student Analysis CSV.
+3. **Load the rubric** file (`.yaml`) the rubric author gave you.
+4. **Overview** shows the author's notes, which questions the rubric regrades, and what to do next.
+   If the file has mistakes or looks like it's for a different quiz, it says so in plain words.
+5. **Review** one student at a time: the answer, the score change and why. Change any score or add
+   a comment, then **Mark reviewed → next**. Keys: <kbd>j</kbd>/<kbd>k</kbd> next/previous, <kbd>r</kbd> toggle reviewed.
+   **Gradebook** shows everyone at once.
+6. **Send to Canvas…** Shows exactly what will change, can be limited to reviewed students,
+   saves a backup, keeps grades hidden, and writes. Post grades from Canvas when ready.
    **Export CSV** saves the results without touching Canvas.
 
-Overrides, reviewed marks and the rubric draft are remembered per quiz on this computer.
+The rubric is re-read from its file every time you open the quiz, so if the author updates the
+file (e.g. in a shared folder), you get the new version. **Reload** on the Overview does it on demand.
+
+### Edit rubrics (for whoever writes the rubric)
+
+- **Rubric** tab: a YAML editor that re-grades as you type, with errors and warnings by line.
+  **New from quiz** writes a template listing every question and the answers students gave.
+  See [RUBRIC.md](RUBRIC.md) for the format and [examples/](examples/) for a worked example.
+- **Answers** tab: every distinct answer to a question (or each blank), how many students gave it,
+  the rubric score vs Canvas, and which rule decided. Use it to tune regexes until every common
+  answer scores the way you want. **Copy regex** turns an answer into a pattern.
+- Save the `.yaml` and share it with the other graders. Put instructions for them in `notes:` (and
+  per-question `note:`); they'll see them in Grade mode.
+
+Overrides, reviewed marks and the rubric location are remembered per quiz on this computer.
 
 ## Notes
 

@@ -12,6 +12,10 @@
 version: 1
 title: MT 02 2025 (AU25)
 
+notes: |
+  Q9 accepts any formatting of the right number (2, 2.0, 2.00).
+  Q34 is strict; flagged answers need a person to decide.
+
 settings:
   case_sensitive: false
   whitespace: lines
@@ -60,6 +64,7 @@ questions:
   # Q34: safety-factor classification loop (8 pts over 6 blanks)
   "93885":
     points: 8
+    note: Equivalent conditions are fine. Use your judgment on flagged blanks.
     blanks:
       - '^if\s*\(\s*sf\s*\[\s*counter\s*\]\s*<\s*1(\.0*)?\s*\)$'
       - rules:
