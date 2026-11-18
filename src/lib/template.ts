@@ -33,6 +33,7 @@ export function looseRegex(answer: string): string {
 
 function pointsLine(q: Question): string {
   if (q.pointsPossible == null) return "    points: 0        # max points unknown: set this";
+  if (q.pointsPossible === 0) return "    points: 0        # this question is worth 0 points, so any partial credit is 0 too; set a value to see scores";
   const tag = q.pointsSource === "inferred" ? "   # inferred from the best score earned: check it" : "";
   return `    points: ${+q.pointsPossible.toFixed(4)}${tag}`;
 }
@@ -41,7 +42,22 @@ function pointsLine(q: Question): string {
  * Correct order for an ordering question, from the students Canvas gave full credit:
  * one pattern per piece, built from a line no other piece contains.
  */
-function orderPatterns(quiz: QuizData, q: Question): string[] | null {
+function orderPatterns(quiz: QuizData, q: Question): { patterns: string[]; from: string } | null {
+  // Prefer the real answer key (New Quizzes provides it); otherwise the order full-credit students used.
+  const keyed = q.answerKey?.map((a) => a[0] ?? "");
+  const order = keyed?.length ? keyed : fullCreditOrder(quiz, q);
+  if (!order) return null;
+  const lines = order.map((p) => p.split("\n").map((l) => squash(l)).filter(Boolean));
+  const patterns = lines.map((ls, i) => {
+    const others = new Set(lines.filter((_, j) => j !== i).flat());
+    const pick = ls.find((l) => !others.has(l) && l.length > 3) ?? ls.find((l) => !others.has(l)) ?? ls[0] ?? "";
+    // whole-line match (m flag), so "else" doesn't also match "else if (...)"
+    return `/${looseRegex(pick)}/m`;
+  });
+  return { patterns, from: keyed?.length ? "the quiz's answer key" : "the order students with full credit used" };
+}
+
+function fullCreditOrder(quiz: QuizData, q: Question): string[] | null {
   const max = q.pointsPossible;
   if (!max) return null;
   const counts = new Map<string, { parts: string[]; n: number }>();
@@ -52,14 +68,7 @@ function orderPatterns(quiz: QuizData, q: Question): string[] | null {
     counts.set(k, { parts: r.parts, n: (counts.get(k)?.n ?? 0) + 1 });
   }
   const best = [...counts.values()].sort((a, b) => b.n - a.n)[0];
-  if (!best) return null;
-  const lines = best.parts.map((p) => p.split("\n").map((l) => squash(l)).filter(Boolean));
-  return lines.map((ls, i) => {
-    const others = new Set(lines.filter((_, j) => j !== i).flat());
-    const pick = ls.find((l) => !others.has(l) && l.length > 3) ?? ls.find((l) => !others.has(l)) ?? ls[0] ?? "";
-    // whole-line match (m flag), so "else" doesn't also match "else if (...)"
-    return `/${looseRegex(pick)}/m`;
-  });
+  return best ? best.parts : null;
 }
 
 function example(quiz: QuizData, q: Question): string[] {
@@ -68,9 +77,15 @@ function example(quiz: QuizData, q: Question): string[] {
     case "ordering": {
       const pats = orderPatterns(quiz, q);
       L.push("    scoring: position     # position: points per piece in its right spot | sequence: longest run in the right order");
-      L.push(`    order:${pats ? "                # from the order students with full credit used" : ""}`);
-      if (pats) pats.forEach((p, i) => L.push(`      - ${q1(p)}   # piece ${i + 1}`));
-      else L.push("      - 'a line only the first piece contains'", "      - 'a line only the second piece contains'");
+      if (pats) {
+        L.push(`    order:                # from ${pats.from}`);
+        pats.patterns.forEach((p, i) => L.push(`      - ${q1(p)}   # piece ${i + 1}`));
+      } else {
+        L.push("    # Couldn't find the correct order (no answer key and nobody got full credit).");
+        L.push("    # Replace these with one pattern per piece, in the correct order:");
+        L.push("    order:");
+        L.push("      - 'a line only the first piece contains'", "      - 'a line only the second piece contains'");
+      }
       break;
     }
     case "fill_blank":
@@ -78,8 +93,16 @@ function example(quiz: QuizData, q: Question): string[] {
       L.push("    blanks:");
       q.blankIds.forEach((b, i) => {
         const seen = topAnswers(quiz, q, i, 5);
+        const accepted = q.answerKey?.[i]?.filter(Boolean) ?? [];
+        const seenNote = seen.length ? ` | seen: ${seen.join(", ")}` : "";
+        if (accepted.length) {
+          // New Quizzes gave us the answer key: one pattern per accepted answer.
+          const pats = [...new Set(accepted.map(looseRegex))].map(q1);
+          L.push(`      - ${pats.length === 1 ? pats[0] : `[${pats.join(", ")}]`}   # key: ${accepted.join(" | ")}${seenNote}`);
+          return;
+        }
         const guess = /^blank\d*$|^answer$/.test(b) ? (seen[0]?.replace(/ ×\d+$/, "") ?? "") : b;
-        L.push(`      - ${q1(looseRegex(guess))}   # ${b}${seen.length ? ` | seen: ${seen.join(", ")}` : ""}`);
+        L.push(`      - ${q1(looseRegex(guess))}   # ${b}${seenNote}`);
       });
       break;
     }

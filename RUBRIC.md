@@ -149,7 +149,19 @@ Q32:
 - `scoring: sequence`: credit for the longest run of pieces in the right relative order (gaps
   allowed). Moving one piece to the wrong place costs that piece only, not everything after it.
 
-A piece that matches no pattern, or more than one, is flagged for review. **New from quiz**
+**Quizzes loaded from New Quizzes** already say which piece is in each slot and where it belongs,
+so grading uses that and the patterns only need to be listed in the right number. There you can
+skip patterns entirely with `order: key` (the quiz's own answer key):
+
+```yaml
+"134445":
+  points: 10
+  scoring: sequence
+  order: key
+```
+
+With a CSV report there's no such data, so patterns are needed: a piece that matches no pattern,
+or more than one, is flagged for review. **New from quiz**
 fills in `order:` automatically from the students who got full credit.
 
 ## Essays
