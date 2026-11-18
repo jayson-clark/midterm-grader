@@ -124,6 +124,8 @@ export interface CanvasSubmission {
   workflow_state: string;
   submitted_at: string | null;
   posted_at: string | null;
+  /** LTI submissions (New Quizzes): the tool URL, which carries the participant session id */
+  url?: string | null;
   user?: { name: string; sortable_name: string };
   submission_history?: { attempt: number; submission_data?: Record<string, unknown>[] }[];
 }
@@ -171,3 +173,31 @@ export async function signInWithCanvas(baseUrl: string, cancelled: () => boolean
   }
   return null;
 }
+
+// ---------- New Quizzes (tokens stay in the backend; see src-tauri/src/nq.rs) ----------
+
+export interface NqInfo {
+  key: string;
+  lti_assignment_id: string;
+  read_only: boolean;
+  title: string | null;
+}
+
+async function nqCall<T>(cmd: string, args: Record<string, unknown>): Promise<T> {
+  try {
+    return await invoke<T>(cmd, args);
+  } catch (e) {
+    const msg = String(e);
+    if (msg.startsWith("SIGNED_OUT:")) {
+      window.dispatchEvent(new CustomEvent(SIGNED_OUT_EVENT));
+      throw new Error(msg.slice("SIGNED_OUT:".length).trim());
+    }
+    throw new Error(msg);
+  }
+}
+
+export const nqOpen = (courseId: string, assignmentId: string) => nqCall<NqInfo>("nq_open", { courseId, assignmentId });
+export const nqLti = <T = unknown>(key: string, path: string, paginate = false) => nqCall<T>("nq_lti", { key, path, paginate });
+export const nqAttempt = (key: string, participantSessionId: string) => nqCall<string>("nq_attempt", { key, participantSessionId });
+export const nqQuiz = <T = unknown>(key: string, quizSessionId: string, method: "GET" | "POST", path: string, body?: unknown, paginate = false) =>
+  nqCall<T>("nq_quiz", { key, quizSessionId, method, path, body: body ?? null, paginate });

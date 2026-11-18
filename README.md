@@ -14,31 +14,24 @@ rubric, see how every answer scores, review each submission, and send the result
 
 | | Classic quizzes | New Quizzes |
 | --- | --- | --- |
-| Where answers come from | Canvas API, automatically | The quiz's **Student Analysis** report (CSV) you export from Canvas |
-| What gets written back | Per-question scores, plus per-question comments where the rubric or a grader adds one | The assignment's **total** score, plus one **submission comment** collecting any rubric / grader comments ("Q34: …") |
+| Where answers come from | Canvas, automatically | New Quizzes, automatically (the same data SpeedGrader shows), with the answer key for fill-in-the-blank questions |
+| What gets written back | Per-question scores, plus per-question comments | Per-question scores, saved in New Quizzes the way SpeedGrader saves them (New Quizzes then updates the Canvas total), plus a Canvas submission comment for any comments |
 
-New Quizzes has no public API for students' answers or for per-question scores. For those,
-the new total is *Canvas total − Canvas points on rubric questions + rubric points*. The
-per-question breakdown inside the quiz won't reflect it, and a later regrade inside New Quizzes
-can overwrite it. Before writing, the app re-checks each student's live Canvas score and
-skips anyone whose score changed since the report was exported.
+New Quizzes has no public API for this, so the app opens each quiz the same way Canvas's own
+New Quizzes page does, using your sign-in and your grading permissions (a TA can use it). Before
+saving, each attempt is re-read and anyone whose scores changed since you loaded the quiz is skipped;
+after saving, the scores are read back to confirm.
 
-To get the report: open the quiz in Canvas → **Build** (or **Moderate**) → **Reports** →
-**Student Analysis** → CSV. You can also open a report without connecting to Canvas (offline
-mode) to review and export grades as a CSV.
+> **Status:** reading New Quizzes and saving per-question scores both work (tested on a Test
+> Student attempt, Nov 2026). They use New Quizzes' internal API, which Instructure doesn't document
+> and could change; if a save doesn't stick, the app reports it.
 
-## Install / run
-
-Prerequisites: [Node 20+](https://nodejs.org) and [Rust](https://rustup.rs). On macOS also run
-`xcode-select --install`; on Windows install the
-[WebView2 / MSVC prerequisites](https://v2.tauri.app/start/prerequisites/).
-
-```bash
-npm install
-npm run app        # development build, opens the app
-npm run bundle     # installable app in src-tauri/target/release/bundle/
-npm test           # grading engine tests
-```
+**Fallback: the Student Analysis report.** If loading from New Quizzes fails (or you're offline),
+use the quiz's report instead: **Build** (or **Moderate**) → **Reports** → **Student Analysis** → CSV.
+With a report, only the assignment's **total** score can be written back (Canvas total − Canvas
+points on rubric questions + rubric points), the quiz's own per-question breakdown won't reflect it,
+and the app re-checks each student's live Canvas score and skips anyone whose score changed since
+the export.
 
 ## Building installers
 
@@ -77,7 +70,7 @@ The switch in the top bar picks one of two modes.
    from your web browser. If the session expires, a banner offers **Sign in again** without losing
    your work. (Alternatively, open *Use an access token instead* and paste a token from Canvas →
    Account → Settings → *+ New Access Token*; it's stored only on this computer.)
-2. **Pick a course and a quiz.** For a New Quiz, also choose its Student Analysis CSV.
+2. **Pick a course and a quiz.** Classic quizzes and New Quizzes both load automatically.
 3. **Load the rubric** file (`.yaml`) the rubric author gave you.
 4. **Overview** shows the author's notes, which questions the rubric regrades, and what to do next.
    If the file has mistakes or looks like it's for a different quiz, it says so in plain words.

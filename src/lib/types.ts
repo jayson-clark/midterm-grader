@@ -44,6 +44,8 @@ export interface Question {
   /** Blank names in order, for fill-in-blank / dropdown questions */
   blankIds: string[];
   choices: Choice[];
+  /** Accepted answers per blank, when the source provides them (New Quizzes API) */
+  answerKey?: string[][];
 }
 
 /** One student's answer to one question. */
@@ -57,6 +59,11 @@ export interface Response {
   parts?: string[];
   /** Set when a multi-blank answer couldn't be split into the expected number of blanks. */
   partsMismatch?: boolean;
+  /**
+   * Ordering questions loaded from New Quizzes: for each slot, the correct position (0-based) of
+   * the piece the student put there, or -1 if unknown. Lets grading skip text patterns.
+   */
+  orderIndex?: number[];
   /** Canvas's current score for the question. */
   canvasPoints: number | null;
   answered: boolean;
@@ -72,10 +79,12 @@ export interface Student {
   submittedAt: string | null;
   /** classic quizzes only: needed to write per-question scores */
   quizSubmissionId?: string;
+  /** New Quizzes (API) only: the attempt on the New Quizzes side */
+  nq?: { participantSessionId: string; quizSessionId: string };
   responses: Record<string, Response>;
 }
 
-export type SourceKind = "classic" | "new_quizzes_csv";
+export type SourceKind = "classic" | "new_quizzes_csv" | "new_quizzes_api";
 
 export interface QuizData {
   source: SourceKind;
@@ -90,4 +99,8 @@ export interface QuizData {
   questions: Question[];
   students: Student[];
   notes: string[];
+  /** New Quizzes (API): handle for the launched quiz in the backend */
+  nqKey?: string;
+  /** New Quizzes reported the quiz as read-only (e.g. a concluded course) */
+  readOnly?: boolean;
 }

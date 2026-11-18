@@ -235,18 +235,30 @@ function longestInOrder(ids: number[]): Set<number> {
 
 /** Ordering questions with `order:`: identify each piece, then score by position or sequence. */
 function gradeOrder(spec: QuestionSpec, resp: Response | undefined, cell: Cell, max: number | null): Cell {
-  const order = spec.order!;
-  const n = order.length;
   const parts = (resp?.parts ?? []).map((p) => normalize(p, spec.options));
-  const noCtx: MatchContext = { canvasPoints: null, max: null };
   const flags: string[] = [];
-  const ids = parts.map((t, i) => {
-    const hits = order.flatMap((item, k) => (item.rules.some((r) => { try { return r.test(t, noCtx); } catch { return false; } }) ? [k] : []));
-    if (hits.length === 0) flags.push(`piece ${i + 1} doesn't match any pattern under order:`);
-    if (hits.length > 1) flags.push(`piece ${i + 1} matches order items ${hits.map((h) => h + 1).join(" and ")}; make those patterns more specific`);
-    return hits.length === 1 ? hits[0] : -1;
-  });
-  if (parts.length !== n) flags.push(`the answer has ${parts.length} pieces but order: lists ${n}`);
+  const known = resp?.orderIndex;
+  // Pieces in the quiz's own order: from `order: key`, or the patterns listed under order:.
+  const order: PartSpec[] = spec.orderKey ? Array.from({ length: known?.length ?? parts.length }, () => ({ rules: [], mode: "first", start: null, otherwise: { score: { kind: "points", value: 0 } }, points: null })) : spec.order!;
+  const n = order.length;
+  let ids: number[];
+  if (known && known.length === n) {
+    // New Quizzes says which piece is in each slot: no need to recognize pieces by their text.
+    ids = known;
+    known.forEach((k, i) => { if (k < 0) flags.push(`piece ${i + 1} isn't in the quiz's answer key`); });
+  } else if (spec.orderKey) {
+    return { ...cell, score: cell.canvasPoints, matched: ["order: key needs the quiz loaded from New Quizzes"],
+      flags: ["order: key uses New Quizzes' answer key, which isn't available for this quiz (CSV report?). List patterns under order: instead."] };
+  } else {
+    const noCtx: MatchContext = { canvasPoints: null, max: null };
+    ids = parts.map((t, i) => {
+      const hits = order.flatMap((item, k) => (item.rules.some((r) => { try { return r.test(t, noCtx); } catch { return false; } }) ? [k] : []));
+      if (hits.length === 0) flags.push(`piece ${i + 1} doesn't match any pattern under order:`);
+      if (hits.length > 1) flags.push(`piece ${i + 1} matches order items ${hits.map((h) => h + 1).join(" and ")}; make those patterns more specific`);
+      return hits.length === 1 ? hits[0] : -1;
+    });
+    if (parts.length !== n) flags.push(`the answer has ${parts.length} pieces but order: lists ${n}`);
+  }
   const fixed = order.reduce((sum, p) => sum + (p.points ?? 0), 0);
   const free = order.filter((p) => p.points == null).length;
   if (max == null && free) flags.push("max points unknown: set points: in the rubric");
@@ -280,12 +292,20 @@ function gradeOrder(spec: QuestionSpec, resp: Response | undefined, cell: Cell, 
   };
 }
 
+/** A graded question worth 0 points always scores 0: say so, so it doesn't look like a bug. */
+function noteZeroMax(cell: Cell): Cell {
+  if (cell.max === 0 && (cell.status === "graded")) {
+    return { ...cell, matched: [...cell.matched, "worth 0 points, so it scores 0: set points: in the rubric to give credit"] };
+  }
+  return cell;
+}
+
 export function gradeStudent(quiz: QuizData, specs: Map<string, QuestionSpec>, s: Student, overrides: Overrides = {}): StudentResult {
   const cells: Record<string, Cell> = {};
   let delta = 0;
   let sum = 0;
   for (const q of quiz.questions) {
-    let cell = gradeQuestion(q, specs.get(q.id), s.responses[q.id]);
+    let cell = noteZeroMax(gradeQuestion(q, specs.get(q.id), s.responses[q.id]));
     const ov = overrides[overrideKey(s.userId, q.id)];
     if (ov && (ov.score != null || ov.comment != null)) {
       const score = ov.score ?? cell.score;

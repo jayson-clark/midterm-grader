@@ -19,6 +19,11 @@ struct Settings {
     /// "token" (personal access token) or "session" (signed in through the in-app Canvas login)
     #[serde(default)]
     auth_mode: String,
+    /// Canvas session cookies from the in-app sign-in, kept so the sign-in survives restarts
+    /// (Canvas's session cookie has no expiry, so the webview drops it on quit). Cleared on sign-out
+    /// or when Canvas says the session has ended.
+    #[serde(default)]
+    session: Vec<(String, String)>,
 }
 
 /// What the UI sees: never the token itself, just whether one is saved.
@@ -36,15 +41,38 @@ impl From<&Settings> for PublicSettings {
     }
 }
 
+/// Serializes settings read-modify-write so parallel requests can't interleave saves.
+static SETTINGS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Atomic save: write a private temp file, then rename it over settings.json.
 fn write_settings(app: &AppHandle, s: &Settings) -> Result<(), String> {
-    let path = config_dir(app)?.join("settings.json");
-    fs::write(&path, serde_json::to_string_pretty(s).unwrap()).map_err(|e| e.to_string())?;
-    #[cfg(unix)]
+    let dir = config_dir(app)?;
+    let path = dir.join("settings.json");
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = dir.join(format!("settings.json.{}.{n}.tmp", std::process::id()));
     {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+        use std::io::Write;
+        let mut opts = fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let mut f = opts.open(&tmp).map_err(|e| e.to_string())?;
+        f.write_all(serde_json::to_string_pretty(s).unwrap().as_bytes()).map_err(|e| e.to_string())?;
+        f.sync_all().map_err(|e| e.to_string())?;
     }
-    Ok(())
+    fs::rename(&tmp, &path).map_err(|e| e.to_string())
+}
+
+/// Read, change and save settings under the lock. `f` returns whether anything changed.
+fn update_settings(app: &AppHandle, f: impl FnOnce(&mut Settings) -> bool) -> Result<Settings, String> {
+    let _guard = SETTINGS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut s = read_settings(app)?;
+    if f(&mut s) { write_settings(app, &s)?; }
+    Ok(s)
 }
 
 struct Http(reqwest::Client);
@@ -120,7 +148,12 @@ struct SessionCookies {
 
 /// Cookies for the Canvas host. Runs off the main thread: reading cookies from a sync context
 /// deadlocks on Windows (WebView2).
-async fn session_cookies(app: &AppHandle, base: &str) -> Result<Option<SessionCookies>, String> {
+fn is_session_cookie(name: &str) -> bool {
+    name == "canvas_session" || name == "_normandy_session" || name == "_legacy_normandy_session"
+}
+
+/// Canvas cookies currently in the app's webview (empty after a restart, see Settings::session).
+async fn webview_cookies(app: &AppHandle, base: &str) -> Result<Vec<(String, String)>, String> {
     let url = url::Url::parse(&format!("{base}/")).map_err(|e| e.to_string())?;
     let app = app.clone();
     let cookies = tauri::async_runtime::spawn_blocking(move || {
@@ -129,15 +162,59 @@ async fn session_cookies(app: &AppHandle, base: &str) -> Result<Option<SessionCo
     })
     .await
     .map_err(|e| e.to_string())??;
-    if !cookies.iter().any(|c| c.name() == "canvas_session" || c.name() == "_normandy_session" || c.name() == "_legacy_normandy_session") {
-        return Ok(None);
-    }
-    let header = cookies.iter().map(|c| format!("{}={}", c.name(), c.value())).collect::<Vec<_>>().join("; ");
-    let csrf = cookies.iter().find(|c| c.name() == "_csrf_token").map(|c| {
-        percent_encoding::percent_decode_str(c.value()).decode_utf8_lossy().into_owned()
-    });
-    Ok(Some(SessionCookies { header, csrf }))
+    Ok(cookies.iter().map(|c| (c.name().to_string(), c.value().to_string())).collect())
 }
+
+fn to_session(pairs: &[(String, String)]) -> SessionCookies {
+    let header = pairs.iter().map(|(n, v)| format!("{n}={v}")).collect::<Vec<_>>().join("; ");
+    let csrf = pairs.iter().find(|(n, _)| n == "_csrf_token")
+        .map(|(_, v)| percent_encoding::percent_decode_str(v).decode_utf8_lossy().into_owned());
+    SessionCookies { header, csrf }
+}
+
+/// The Canvas session to use: the webview's live cookies if it has them (saved for next time),
+/// otherwise the ones saved from an earlier sign-in.
+async fn session_cookies(app: &AppHandle, base: &str) -> Result<Option<SessionCookies>, String> {
+    let live = webview_cookies(app, base).await?;
+    if live.iter().any(|(n, _)| is_session_cookie(n)) {
+        let _ = update_settings(app, |s| {
+            if s.auth_mode == "session" && s.session != live { s.session = live.clone(); true } else { false }
+        });
+        return Ok(Some(to_session(&live)));
+    }
+    let s = read_settings(app)?;
+    if s.auth_mode == "session" && s.session.iter().any(|(n, _)| is_session_cookie(n)) {
+        return Ok(Some(to_session(&s.session)));
+    }
+    Ok(None)
+}
+
+/// Canvas refreshes its cookies on responses; keep the saved copy current.
+fn refresh_saved_session(app: &AppHandle, headers: &reqwest::header::HeaderMap) {
+    let updates: Vec<(String, String)> = headers.get_all("set-cookie").iter().filter_map(|h| {
+        let (name, rest) = h.to_str().ok()?.split_once('=')?;
+        let value = rest.split(';').next().unwrap_or("").to_string();
+        (!value.is_empty()).then(|| (name.trim().to_string(), value))
+    }).collect();
+    if updates.is_empty() { return; }
+    let _ = update_settings(app, |s| {
+        if s.auth_mode != "session" || s.session.is_empty() { return false; }
+        let mut changed = false;
+        for (name, value) in &updates {
+            if let Some(slot) = s.session.iter_mut().find(|(n, _)| n == name) {
+                if &slot.1 != value { slot.1 = value.clone(); changed = true; }
+            }
+        }
+        changed
+    });
+}
+
+/// Canvas says the session has ended: forget the saved copy.
+fn forget_saved_session(app: &AppHandle) {
+    let _ = update_settings(app, |s| { let had = !s.session.is_empty(); s.session.clear(); had });
+}
+
+mod nq;
 
 /// Opens the Canvas login page in its own window.
 #[tauri::command]
@@ -184,6 +261,7 @@ async fn check_login(app: AppHandle, http: tauri::State<'_, Http>) -> Result<Log
     let text = resp.text().await.map_err(|e| e.to_string())?;
     let me: Value = serde_json::from_str(strip_json_guard(&text)).unwrap_or(Value::Null);
     s.auth_mode = "session".into();
+    s.session = webview_cookies(&app, &s.base_url).await.unwrap_or_default();
     write_settings(&app, &s)?;
     if let Some(w) = app.get_webview_window(LOGIN_LABEL) {
         let _ = w.close();
@@ -214,6 +292,7 @@ async fn sign_out(app: AppHandle) -> Result<PublicSettings, String> {
     if s.auth_mode == "session" {
         s.auth_mode.clear();
     }
+    s.session.clear();
     write_settings(&app, &s)?;
     Ok((&s).into())
 }
@@ -293,9 +372,11 @@ async fn canvas(app: AppHandle, http: tauri::State<'_, Http>, req: CanvasRequest
         let resp = rb.send().await.map_err(|e| format!("Network error: {e}"))?;
         let status = resp.status();
         let next = next_link(resp.headers());
+        if session { refresh_saved_session(&app, resp.headers()); }
         let text = resp.text().await.map_err(|e| e.to_string())?;
         if !status.is_success() {
             if session && status.as_u16() == 401 {
+                forget_saved_session(&app);
                 return Err("SIGNED_OUT: Your Canvas session has expired. Sign in again.".into());
             }
             let snippet: String = text.chars().take(400).collect();
@@ -355,6 +436,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(Http(client))
+        .manage(nq::NqState::default())
         .invoke_handler(tauri::generate_handler![
             load_settings,
             save_settings,
@@ -362,6 +444,10 @@ pub fn run() {
             open_login,
             check_login,
             sign_out,
+            nq::nq_open,
+            nq::nq_lti,
+            nq::nq_attempt,
+            nq::nq_quiz,
             canvas,
             read_text_file,
             write_text_file,

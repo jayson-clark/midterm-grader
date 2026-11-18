@@ -156,7 +156,7 @@ export function Workspace({ quiz, mode }: { quiz: QuizData; mode: Mode }) {
     return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
   };
   const hasComments = all.some((r) => Object.values(r.cells).some((c) => (c.status === "graded" || c.status === "override") && c.comments.length > 0));
-  const canSend = !!quiz.courseId && !!quiz.assignmentId && !hasErrors && (changed > 0 || hasComments);
+  const canSend = !!quiz.courseId && !!quiz.assignmentId && !quiz.readOnly && !hasErrors && (changed > 0 || hasComments);
 
   async function exportCsv() {
     const p = await save({ defaultPath: `${quiz.title.replace(/[^\w.-]+/g, "_")}_grades.csv`, filters: [{ name: "CSV", extensions: ["csv"] }] });
@@ -183,7 +183,7 @@ export function Workspace({ quiz, mode }: { quiz: QuizData; mode: Mode }) {
     dirty: savedText !== rubricText, loading, loadError, choose: chooseRubric, reload: reloadRubric,
   };
   const needsRubric = mode === "grade" && !rubricPath && resolved.specs.size === 0;
-  const sendTitle = !quiz.courseId ? "Offline: not connected to a Canvas assignment" : hasErrors ? "The rubric has errors" : changed === 0 && !hasComments ? "Nothing to send" : "";
+  const sendTitle = !quiz.courseId ? "Offline: not connected to a Canvas assignment" : quiz.readOnly ? "New Quizzes reports this quiz as read-only" : hasErrors ? "The rubric has errors" : changed === 0 && !hasComments ? "Nothing to send" : "";
 
   if (needsRubric) {
     return <div className="main"><RubricPicker quiz={quiz} rubric={rubric} /></div>;

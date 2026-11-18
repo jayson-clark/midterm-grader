@@ -2,10 +2,13 @@
 //
 // Classic quizzes: per-question scores (and comments, only where the rubric or reviewer
 // wrote one) on the quiz submission. Only rubric-graded / overridden questions are sent.
-// New Quizzes: Canvas has no API for per-question scores, so the assignment's total score is
-// set to Canvas total - Canvas points on rubric questions + rubric points.
+// New Quizzes from a CSV report: Canvas has no public API for per-question scores, so the
+// assignment's total score is set to Canvas total - Canvas points on rubric questions + rubric points.
+// New Quizzes loaded through its API: per-question scores are saved on the attempt the way
+// SpeedGrader does (see saveNqAttempt); comments go to Canvas as a submission comment.
 
-import { api, listSubmissions, saveBackup } from "./canvas";
+import { api, listSubmissions, nqAttempt, nqQuiz, saveBackup } from "./canvas";
+import type { ApiItemResult } from "./sources/newQuizzesApi";
 import type { StudentResult } from "./grader";
 import type { QuizData } from "./types";
 
@@ -62,6 +65,12 @@ export function planWrites(quiz: QuizData, results: Map<string, StudentResult>, 
     const w: PlannedWrite = { userId: s.userId, name: s.name, canvasScore: s.canvasScore, newScore: r.newScore, questions };
     if (quiz.source === "classic") {
       if (!s.quizSubmissionId) w.blocked = "quiz submission not found";
+    } else if (quiz.source === "new_quizzes_api") {
+      if (!s.nq) w.blocked = "New Quizzes attempt not found";
+      else if (quiz.readOnly) w.blocked = "New Quizzes reports this quiz as read-only";
+      w.setTotal = false;
+      const notes = questions.filter((q) => q.comment).map((q) => `Q${q.position}: ${q.comment}`);
+      if (notes.length) w.summaryComment = notes.join("\n");
     } else {
       // New Quizzes has no per-question comments, so they all go into one submission comment.
       const totalChanged = r.newScore != null && s.canvasScore != null && Math.abs(r.newScore - s.canvasScore) >= 1e-3;
@@ -125,7 +134,14 @@ export async function executeWrites(
   for (const p of todo) {
     let res: WriteResult;
     try {
-      if (quiz.source === "classic") {
+      if (quiz.source === "new_quizzes_api") {
+        const s = students.get(p.userId)!;
+        const msg = await saveNqAttempt(quiz, s.nq!, p.questions);
+        if (p.summaryComment) {
+          await api(`/courses/${quiz.courseId}/assignments/${quiz.assignmentId}/submissions/${p.userId}`, { method: "PUT", body: { comment: { text_comment: p.summaryComment } } });
+        }
+        res = { userId: p.userId, name: p.name, ok: true, message: msg + (p.summaryComment ? "; comment added" : "") };
+      } else if (quiz.source === "classic") {
         const s = students.get(p.userId)!;
         const questions: Record<string, { score: number; comment?: string }> = {};
         for (const q of p.questions) questions[q.questionId] = q.comment ? { score: q.to, comment: q.comment } : { score: q.to };
@@ -154,4 +170,79 @@ export async function executeWrites(
     onProgress(++done, todo.length, res);
   }
   return results;
+}
+
+// ---------- New Quizzes (API): per-question scores on the attempt ----------
+
+/** snake_case → camelCase on keys that are snake_case; ids, UUIDs and plain words are left alone. */
+function camelKey(k: string): string {
+  return /^[a-z][a-z0-9]*(_[a-z0-9]+)+$/.test(k) ? k.replace(/_([a-z0-9])/g, (_, c: string) => c.toUpperCase()) : k;
+}
+export function camelizeKeys(v: unknown): unknown {
+  if (Array.isArray(v)) return v.map(camelizeKeys);
+  if (v && typeof v === "object") {
+    return Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([k, x]) => [camelKey(k), camelizeKeys(x)]));
+  }
+  return v;
+}
+
+/**
+ * The body New Quizzes' grading screen posts to /api/quiz_sessions/:id/results: every question's
+ * result as its client stores it (keys camelCased, UUID keys untouched), minus id and
+ * gradingMethod, with new scores on the changed questions only.
+ */
+export function buildNqResultsPayload(current: ApiItemResult[], newScores: Map<string, number>): unknown[] {
+  return current.map((r) => {
+    const { id: _id, grading_method: _gm, ...rest } = r as ApiItemResult & { id?: unknown; grading_method?: unknown };
+    void _id; void _gm;
+    const changed = newScores.get(String(r.item_id));
+    return camelizeKeys(changed != null ? { ...rest, score: changed } : rest);
+  });
+}
+
+interface NqQuizSession { authoritative_result?: { id: string | number; fudge_points?: number | null } | null }
+
+async function saveNqAttempt(quiz: QuizData, nq: { participantSessionId: string; quizSessionId: string }, changes: QuestionChange[]): Promise<string> {
+  const key = quiz.nqKey!;
+  const qsid = await nqAttempt(key, nq.participantSessionId); // fresh token for this attempt
+  const qs = await nqQuiz<NqQuizSession>(key, qsid, "GET", `/api/quiz_sessions/${qsid}`);
+  const rid = qs.authoritative_result?.id;
+  if (rid == null) throw new Error("this attempt has no result to grade yet");
+  const resultsPath = `/api/quiz_sessions/${qsid}/results/${rid}/session_item_results`;
+  const current = await nqQuiz<ApiItemResult[]>(key, qsid, "GET", resultsPath, undefined, true);
+
+  // Refuse if anyone changed these questions since the quiz was loaded.
+  const scores = new Map<string, number>();
+  for (const c of changes.filter((c) => c.from == null || Math.abs(c.to - c.from) > 1e-3)) {
+    const cur = current.find((r) => String(r.item_id) === c.questionId);
+    if (!cur) throw new Error(`Q${c.position} isn't in this attempt`);
+    if (c.from != null && Math.abs((cur.score ?? 0) - c.from) > 1e-3) {
+      throw new Error(`Q${c.position} changed in New Quizzes since you loaded the quiz (was ${fmt(c.from)}, now ${fmt(cur.score)}). Reload and try again.`);
+    }
+    scores.set(c.questionId, c.to);
+  }
+  if (!scores.size) return "no score changes";
+
+  const saved = await nqQuiz<{ id?: string | number; score?: number | null } | null>(key, qsid, "POST", `/api/quiz_sessions/${qsid}/results`, {
+    results: buildNqResultsPayload(current, scores),
+    fudge_points: qs.authoritative_result?.fudge_points ?? null,
+  });
+
+  // Saving creates a new result for the attempt; check the scores on whichever result is current now.
+  const qsAfter = await nqQuiz<NqQuizSession>(key, qsid, "GET", `/api/quiz_sessions/${qsid}`).catch(() => null);
+  const ridAfter = qsAfter?.authoritative_result?.id ?? saved?.id ?? rid;
+  const after = await nqQuiz<ApiItemResult[]>(key, qsid, "GET", `/api/quiz_sessions/${qsid}/results/${ridAfter}/session_item_results`, undefined, true).catch(() => null);
+  const detail = `result ${rid} → ${ridAfter}; New Quizzes returned ${saved == null ? "nothing" : `result ${saved.id ?? "?"} with score ${fmt(saved.score ?? null)}`}`;
+  if (after) {
+    const wrong = [...scores].filter(([id, to]) => {
+      const r = after.find((x) => String(x.item_id) === id);
+      return !r || Math.abs((r.score ?? 0) - to) > 1e-3;
+    });
+    if (wrong.length) {
+      const got = wrong.map(([id, to]) => `Q${changes.find((c) => c.questionId === id)?.position}: wanted ${fmt(to)}, New Quizzes has ${fmt(after.find((x) => String(x.item_id) === id)?.score ?? null)}`);
+      throw new Error(`New Quizzes accepted the save but the score didn't change (${got.join("; ")}; ${detail}). Check this attempt in SpeedGrader.`);
+    }
+  }
+  const list = changes.filter((c) => scores.has(c.questionId)).map((c) => `Q${c.position} ${fmt(c.from)} → ${fmt(c.to)}`);
+  return `Saved in New Quizzes: ${list.join(", ")} (${detail})`;
 }

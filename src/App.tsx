@@ -3,7 +3,7 @@ import {
   loadSettings, signInWithCanvas, SIGNED_OUT_EVENT, whoAmI, type AssignmentInfo, type Course, type PublicSettings,
 } from "./lib/canvas";
 import type { QuizData } from "./lib/types";
-import { AssignmentsScreen, ClassicLoadScreen, ConnectScreen, CoursesScreen, CsvLoadScreen } from "./screens/Setup";
+import { AssignmentsScreen, ClassicLoadScreen, ConnectScreen, CoursesScreen, CsvLoadScreen, NewQuizLoadScreen } from "./screens/Setup";
 import { Workspace, type Mode } from "./screens/Workspace";
 import { Logo, Spinner } from "./components/ui";
 
@@ -17,6 +17,8 @@ export default function App() {
   const [course, setCourse] = useState<Course | null>(null);
   const [assignment, setAssignment] = useState<AssignmentInfo | null>(null);
   const [quiz, setQuiz] = useState<QuizData | null>(null);
+  /** New Quizzes: the user chose the CSV report instead of loading from New Quizzes */
+  const [useCsv, setUseCsv] = useState(false);
   const [mode, setModeState] = useState<Mode>(() => {
     try { return localStorage.getItem("mg:mode") === "author" ? "author" : "grade"; } catch { return "grade"; }
   });
@@ -66,7 +68,7 @@ export default function App() {
 
   const go = (v: View) => {
     if (v === "connect" || v === "courses") { setAssignment(null); setQuiz(null); }
-    if (v === "assignments") setQuiz(null);
+    if (v === "assignments") { setQuiz(null); setUseCsv(false); }
     if (v === "load") setQuiz(null);
     setView(v);
   };
@@ -79,7 +81,7 @@ export default function App() {
     if (settings?.auth_mode) crumbs.push({ label: settings.base_url.replace(/^https?:\/\//, ""), view: "connect" });
     if (course) crumbs.push({ label: course.course_code || course.name, view: "courses" });
     if (assignment) crumbs.push({ label: assignment.name, view: "assignments" });
-    if (quiz && assignment?.flavor === "new_quiz") crumbs.push({ label: "Report", view: "load" });
+    if (quiz && assignment?.flavor === "new_quiz" && quiz.source === "new_quizzes_csv") crumbs.push({ label: "Report", view: "load" });
   }
 
   return (
@@ -126,7 +128,9 @@ export default function App() {
       ) : view === "assignments" && course ? (
         <AssignmentsScreen course={course} onPick={(a) => { setAssignment(a); go("load"); }} />
       ) : view === "load" ? (
-        offline || assignment?.flavor === "new_quiz" ? (
+        !offline && assignment?.flavor === "new_quiz" && course && !useCsv ? (
+          <NewQuizLoadScreen course={course} assignment={assignment} onUseCsv={() => setUseCsv(true)} onLoaded={(q) => { setQuiz(q); setView("workspace"); }} />
+        ) : offline || assignment?.flavor === "new_quiz" ? (
           <CsvLoadScreen course={offline ? null : course} assignment={offline ? null : assignment} onLoaded={(q) => { setQuiz(q); setView("workspace"); }} />
         ) : course && assignment ? (
           <ClassicLoadScreen course={course} assignment={assignment} onLoaded={(q) => { setQuiz(q); setView("workspace"); }} />

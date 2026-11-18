@@ -9,6 +9,9 @@ type Stage = "plan" | "running" | "done";
 export function SendDialog({ ctx, onClose }: { ctx: WorkspaceCtx; onClose: () => void }) {
   const { quiz, results, reviewed } = ctx;
   const nq = quiz.source === "new_quizzes_csv";
+  const nqApi = quiz.source === "new_quizzes_api";
+  /** New Quizzes per-question saving is new: ask for an explicit OK the first time per send. */
+  const [untestedOk, setUntestedOk] = useState(false);
   const [onlyReviewed, setOnlyReviewed] = useState(reviewed.size > 0);
   const [summaryComment, setSummaryComment] = useState(false);
   const [postManually, setPostManually] = useState<boolean | null>(null);
@@ -63,7 +66,7 @@ export function SendDialog({ ctx, onClose }: { ctx: WorkspaceCtx; onClose: () =>
         stage === "plan" ? (
           <>
             <button className="btn" onClick={onClose}>Cancel</button>
-            <button className="btn primary" disabled={!confirmed || sendable.length === 0 || postManually == null} onClick={run}>
+            <button className="btn primary" disabled={!confirmed || sendable.length === 0 || postManually == null || (nqApi && (!untestedOk || !!quiz.readOnly))} onClick={run}>
               Send {sendable.length} update{sendable.length === 1 ? "" : "s"}
             </button>
           </>
@@ -76,7 +79,24 @@ export function SendDialog({ ctx, onClose }: { ctx: WorkspaceCtx; onClose: () =>
     >
       {stage === "plan" && (
         <>
-          {nq ? (
+          {nqApi ? (
+            <div className="col" style={{ gap: 8 }}>
+              <div className="notice info small">
+                Each student's regraded questions are saved <b>inside New Quizzes</b>, the same way SpeedGrader saves a grader's changes,
+                and New Quizzes then updates the Canvas total. Other questions aren't changed. Comments are added as a Canvas submission comment.
+                Before saving, each attempt is re-read; anyone whose scores changed since you loaded the quiz is skipped.
+              </div>
+              {quiz.readOnly ? (
+                <div className="notice bad small">New Quizzes reports this quiz as read-only (for example, the course has concluded), so nothing can be saved.</div>
+              ) : (
+                <div className="notice warn small col" style={{ gap: 6 }}>
+                  <div><b>New feature.</b> Saving per-question scores to New Quizzes uses New Quizzes' internal grading API (what SpeedGrader uses), which
+                    Instructure doesn't document and could change. It has been tested on a Test Student attempt. If a save doesn't stick, the result says so; check that attempt in SpeedGrader.</div>
+                  <label className="row"><input type="checkbox" checked={untestedOk} onChange={(e) => setUntestedOk(e.target.checked)} /> Save these scores in New Quizzes</label>
+                </div>
+              )}
+            </div>
+          ) : nq ? (
             <div className="notice warn small">
               <b>New Quizzes: only the total score can be updated.</b> Canvas has no API for per-question scores in New Quizzes, so each student's
               assignment score is set to <i>Canvas total − Canvas points on rubric questions + rubric points</i>. The question-by-question

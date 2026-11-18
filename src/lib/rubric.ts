@@ -53,6 +53,8 @@ export interface QuestionSpec extends PartSpec {
   /** ordering questions: one pattern per piece, in the correct order */
   order: PartSpec[] | null;
   orderScoring: OrderScoring;
+  /** `order: key`: use the quiz's own answer key (New Quizzes) instead of patterns */
+  orderKey: boolean;
   options: Options;
   /** where the spec came from, for the UI */
   origin: string;
@@ -422,7 +424,7 @@ function parsePart(ctx: Ctx, path: (string | number)[], raw: unknown, opts: Opti
 function parseSpec(ctx: Ctx, path: (string | number)[], raw: unknown, opts: Options, origin: string): QuestionSpec | null {
   if (typeof raw === "string" || Array.isArray(raw)) {
     const p = parsePart(ctx, path, raw, opts, PART_KEYS);
-    return p ? { ...p, keep: false, blanks: null, order: null, orderScoring: "position", options: opts, origin } : null;
+    return p ? { ...p, keep: false, blanks: null, order: null, orderScoring: "position", orderKey: false, options: opts, origin } : null;
   }
   if (!isObj(raw)) {
     ctx.error(path, "expected a mapping (points, answer, rules, blanks, ...)");
@@ -452,9 +454,11 @@ function parseSpec(ctx: Ctx, path: (string | number)[], raw: unknown, opts: Opti
     } else ctx.error([...path, "blanks"], "expected a list (in blank order) or a mapping of blank name -> rules");
   }
   let order: PartSpec[] | null = null;
+  let orderKey = false;
   if (raw.order !== undefined) {
     if (base.rules.length || blanks) ctx.error(path, "use order on its own, not with answer/rules/blanks");
-    if (!Array.isArray(raw.order) || raw.order.length < 2) ctx.error([...path, "order"], "expected a list of at least 2 patterns, one per piece, in the correct order");
+    if (raw.order === "key") { order = []; orderKey = true; }
+    else if (!Array.isArray(raw.order) || raw.order.length < 2) ctx.error([...path, "order"], 'expected "key" or a list of at least 2 patterns, one per piece, in the correct order');
     else {
       order = [];
       raw.order.forEach((b, i) => { const p = parsePart(ctx, [...path, "order", i], b, options, PART_KEYS); if (p) order!.push(p); });
@@ -470,7 +474,7 @@ function parseSpec(ctx: Ctx, path: (string | number)[], raw: unknown, opts: Opti
     ctx.warn(path, "no answer, rules, blanks or order: every answer will get the `otherwise` score");
   }
   const note = typeof raw.note === "string" ? raw.note.trim() : undefined;
-  return { ...base, keep, blanks, order, orderScoring, options, origin, note };
+  return { ...base, keep, blanks, order, orderScoring, orderKey, options, origin, note };
 }
 
 export function parseRubric(text: string): ParseResult {
@@ -584,7 +588,7 @@ export function describeSpec(spec: QuestionSpec): string {
   if (spec.keep) return "Keeps the Canvas score";
   const pts = spec.points != null ? `${spec.points} pts · ` : "";
   if (spec.order) {
-    const n = spec.order.length;
+    const n = spec.orderKey ? "the quiz's" : `${spec.order.length}`;
     return spec.orderScoring === "sequence"
       ? `${pts}${n} pieces; credit for the longest run in the right order`
       : `${pts}${n} pieces; credit for each piece in its right spot`;

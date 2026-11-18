@@ -6,6 +6,7 @@ import {
 } from "../lib/canvas";
 import { loadClassicQuiz } from "../lib/sources/classic";
 import { parseStudentAnalysisCsv } from "../lib/sources/newQuizzesCsv";
+import { loadNewQuizFromApi, type LoadProgress } from "../lib/sources/newQuizzesApi";
 import type { QuizData } from "../lib/types";
 import { ErrorNote, Spinner, fmt } from "../components/ui";
 
@@ -224,6 +225,56 @@ export function ClassicLoadScreen({ course, assignment, onLoaded }: { course: Co
       <div className="inner narrow">
         <h1>{assignment.name}</h1>
         {error ? <ErrorNote error={error} /> : <div className="row muted"><Spinner /> Loading questions and submissions…</div>}
+      </div>
+    </div>
+  );
+}
+
+/** New Quizzes: load straight from New Quizzes, with the CSV report as a fallback. */
+export function NewQuizLoadScreen({ course, assignment, onLoaded, onUseCsv }: {
+  course: Course;
+  assignment: AssignmentInfo;
+  onLoaded: (q: QuizData) => void;
+  onUseCsv: () => void;
+}) {
+  const [progress, setProgress] = useState<LoadProgress>({ phase: "Opening New Quizzes", done: 0, total: 0 });
+  const [error, setError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    let live = true;
+    setError(null);
+    loadNewQuizFromApi(String(course.id), String(assignment.id), assignment.name, (p) => live && setProgress(p))
+      .then((q) => {
+        if (!live) return;
+        q.postManually = assignment.post_manually ?? null;
+        onLoaded(q);
+      })
+      .catch((e) => live && setError((e as Error).message));
+    return () => { live = false; };
+  }, [course.id, assignment.id, attempt]); // eslint-disable-line react-hooks/exhaustive-deps
+  const pct = progress.total ? Math.round((progress.done / progress.total) * 100) : null;
+  return (
+    <div className="center-page">
+      <div className="inner narrow">
+        <div>
+          <h1>{assignment.name}</h1>
+          <div className="muted">New Quiz · {course.name}</div>
+        </div>
+        {error ? (
+          <div className="card pad col" style={{ gap: 12 }}>
+            <div className="notice bad">Couldn't load this quiz from New Quizzes: {error}</div>
+            <div className="row">
+              <button className="btn" onClick={() => setAttempt((n) => n + 1)}>Try again</button>
+              <button className="btn primary" onClick={onUseCsv}>Use a Student Analysis CSV instead</button>
+            </div>
+          </div>
+        ) : (
+          <div className="card pad col" style={{ gap: 10 }}>
+            <div className="row"><Spinner /> {progress.phase}{progress.total ? `: ${progress.done} of ${progress.total} students` : "…"}</div>
+            {pct != null && <div className="progress"><div style={{ width: `${pct}%` }} /></div>}
+            <button className="btn ghost sm" style={{ alignSelf: "flex-start" }} onClick={onUseCsv}>Use a Student Analysis CSV instead</button>
+          </div>
+        )}
       </div>
     </div>
   );
