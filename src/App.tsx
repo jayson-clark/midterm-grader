@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import {
   loadSettings, signInWithCanvas, SIGNED_OUT_EVENT, whoAmI, type AssignmentInfo, type Course, type PublicSettings,
 } from "./lib/canvas";
@@ -8,6 +9,14 @@ import { Workspace, type Mode } from "./screens/Workspace";
 import { Logo, Spinner } from "./components/ui";
 
 type View = "connect" | "courses" | "assignments" | "load" | "workspace";
+
+const ZOOMS = [0.85, 1, 1.15, 1.3, 1.5];
+
+/** Scale the whole window, like a browser's zoom. */
+async function applyZoom(z: number) {
+  try { await getCurrentWebview().setZoom(z); }
+  catch { document.documentElement.style.setProperty("zoom", String(z)); }
+}
 
 export default function App() {
   const [settings, setSettings] = useState<PublicSettings | null>(null);
@@ -26,6 +35,25 @@ export default function App() {
     setModeState(m);
     try { localStorage.setItem("mg:mode", m); } catch { /* not fatal */ }
   };
+
+  const [zoom, setZoom] = useState(() => {
+    try { const z = Number(localStorage.getItem("mg:zoom")); return ZOOMS.includes(z) ? z : 1; } catch { return 1; }
+  });
+  useEffect(() => {
+    void applyZoom(zoom);
+    try { localStorage.setItem("mg:zoom", String(zoom)); } catch { /* not fatal */ }
+  }, [zoom]);
+  const stepZoom = (d: number) => setZoom((z) => ZOOMS[Math.min(ZOOMS.length - 1, Math.max(0, ZOOMS.indexOf(z) + d))]);
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
+      if (e.key === "=" || e.key === "+") { e.preventDefault(); stepZoom(1); }
+      else if (e.key === "-" || e.key === "_") { e.preventDefault(); stepZoom(-1); }
+      else if (e.key === "0") { e.preventDefault(); setZoom(1); }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   const [notice, setNotice] = useState<string | null>(null);
   const [expired, setExpired] = useState(false);
@@ -73,30 +101,49 @@ export default function App() {
     setView(v);
   };
 
-  const crumbs: { label: string; view: View }[] = [];
-  if (offline) {
-    crumbs.push({ label: "Offline", view: "connect" });
-    if (quiz) crumbs.push({ label: quiz.title, view: "load" });
-  } else {
-    if (settings?.auth_mode) crumbs.push({ label: settings.base_url.replace(/^https?:\/\//, ""), view: "connect" });
-    if (course) crumbs.push({ label: course.course_code || course.name, view: "courses" });
-    if (assignment) crumbs.push({ label: assignment.name, view: "assignments" });
-    if (quiz && assignment?.flavor === "new_quiz" && quiz.source === "new_quizzes_csv") crumbs.push({ label: "Report", view: "load" });
-  }
+  // The process, left to right. Finished steps show what was picked and go back to that choice.
+  const steps: { label: string; value?: string; view: View }[] = offline
+    ? [
+      { label: "Connect", value: "Offline", view: "connect" },
+      { label: "Report", value: quiz?.title, view: "load" },
+      { label: "Grade", view: "workspace" },
+    ]
+    : [
+      { label: "Connect", value: settings?.auth_mode ? settings.base_url.replace(/^https?:\/\//, "") : undefined, view: "connect" },
+      { label: "Course", value: course ? course.course_code || course.name : undefined, view: "courses" },
+      { label: "Quiz", value: assignment?.name, view: "assignments" },
+      ...(useCsv && assignment?.flavor === "new_quiz" ? [{ label: "Report", view: "load" as View }] : []),
+      { label: "Grade", view: "workspace" },
+    ];
+  const at = steps.findIndex((s) => s.view === view);
+  const current = at >= 0 ? at : steps.length - 1;
 
   return (
     <div className="app">
       <header className="topbar">
-        <div className="brand"><Logo /> Midterm Grader</div>
-        <nav className="crumbs">
-          {crumbs.map((c, i) => (
-            <span key={i} className="row" style={{ gap: 4 }}>
-              <span className="sep">/</span>
-              <button onClick={() => { if (c.view === "connect") setOffline(false); go(c.view); }}>{c.label}</button>
-            </span>
-          ))}
+        <div className="brand"><Logo /> <span className="name">Midterm Grader</span></div>
+        <nav className="steps-nav" aria-label="Progress">
+          {steps.map((s, i) => {
+            const state = i < current ? "done" : i === current ? "current" : "todo";
+            return (
+              <span key={s.label} className="row" style={{ gap: 2, minWidth: 0, flexShrink: state === "current" ? 0 : 1 }}>
+                {i > 0 && <span className="sep" aria-hidden>›</span>}
+                <button className={`stepc ${state}`} disabled={state !== "done"} aria-current={state === "current" ? "step" : undefined}
+                  title={state === "done" ? `${s.label}${s.value ? `: ${s.value}` : ""} (click to change)` : s.label}
+                  onClick={() => { if (s.view === "connect") setOffline(false); go(s.view); }}>
+                  <span className="n">{state === "done" ? "✓" : i + 1}</span>
+                  <span className="lbl">{state === "done" && s.value ? s.value : s.label}</span>
+                </button>
+              </span>
+            );
+          })}
         </nav>
         <span className="spacer" />
+        <div className="seg zoom" role="group" aria-label="Text size">
+          <button onClick={() => stepZoom(-1)} disabled={zoom === ZOOMS[0]} title="Make everything smaller (⌘−)" aria-label="Zoom out">A−</button>
+          <button className="pct" onClick={() => setZoom(1)} title="Reset to 100% (⌘0)">{Math.round(zoom * 100)}%</button>
+          <button onClick={() => stepZoom(1)} disabled={zoom === ZOOMS[ZOOMS.length - 1]} title="Make everything bigger (⌘+)" aria-label="Zoom in" style={{ fontSize: 15 }}>A+</button>
+        </div>
         <div className="seg" title="Grade: load a rubric and use it. Edit rubrics: write and test rubrics.">
           <button className={mode === "grade" ? "on" : ""} onClick={() => setMode("grade")}>Grade</button>
           <button className={mode === "author" ? "on" : ""} onClick={() => setMode("author")}>Edit rubrics</button>
@@ -104,7 +151,7 @@ export default function App() {
       </header>
 
       {expired && view !== "connect" && (
-        <div className="notice warn row" style={{ borderRadius: 0, padding: "8px 16px" }}>
+        <div className="notice warn banner row">
           <span className="grow">Your Canvas session has expired. Sign in again to keep working; nothing you've done here is lost.</span>
           {reauthing ? (
             <>

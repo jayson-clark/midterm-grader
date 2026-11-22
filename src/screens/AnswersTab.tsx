@@ -52,8 +52,8 @@ export function AnswersTab({ ctx, questionId, setQuestionId }: { ctx: WorkspaceC
         </div>
       </div>
       <div className="pane grow">
-        <div className="pane-head" style={{ alignItems: "flex-start", flexDirection: "column", gap: 6, padding: "10px 16px" }}>
-          <div className="row" style={{ width: "100%" }}>
+        <div className="pane-head stack roomy">
+          <div className="row">
             <h2>Q{q.position}</h2>
             <span className="badge">{q.kind}{q.rawType !== q.kind ? ` · ${q.rawType}` : ""}</span>
             <span className="badge">{q.pointsPossible ?? "?"} pts{q.pointsSource === "inferred" ? " (inferred)" : ""}</span>
@@ -62,9 +62,9 @@ export function AnswersTab({ ctx, questionId, setQuestionId }: { ctx: WorkspaceC
             <span className="spacer" />
             <button className="btn sm" onClick={() => ctx.goTo("rubric")}>Edit rubric</button>
           </div>
-          <div className={`prompt ${promptOpen ? "open" : ""}`} onClick={() => setPromptOpen(!promptOpen)} title="Click to expand">{q.text}</div>
+          <div className={`prompt ${promptOpen ? "open" : ""}`} onClick={() => setPromptOpen(!promptOpen)} title={promptOpen ? "Click to collapse" : "Click to show the whole question"}>{q.text}</div>
           {hasBlanks && (
-            <div className="seg">
+            <div className="seg" style={{ alignSelf: "flex-start" }}>
               {q.blankIds.map((b, i) => (
                 <button key={i} className={blank === i ? "on" : ""} onClick={() => setBlank(i)} title={b}>
                   {i + 1}{/^blank\d*$/.test(b) ? "" : `: ${truncate(b, 18)}`}

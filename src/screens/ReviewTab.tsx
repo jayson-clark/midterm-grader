@@ -54,12 +54,12 @@ export function ReviewTab({ ctx, userId, setUserId }: { ctx: WorkspaceCtx; userI
   return (
     <>
       <div className="pane sidebar">
-        <div className="pane-head" style={{ flexDirection: "column", alignItems: "stretch", gap: 6 }}>
-          <input type="search" placeholder="Search students" value={search} onChange={(e) => setSearch(e.target.value)} />
-          <div className="seg" style={{ alignSelf: "flex-start" }}>
+        <div className="pane-head stack">
+          <input type="search" placeholder="Search students" aria-label="Search students" value={search} onChange={(e) => setSearch(e.target.value)} />
+          <div className="seg fill">
             {(["all", "changed", "flagged", "todo"] as Filter[]).map((f) => (
               <button key={f} className={filter === f ? "on" : ""} onClick={() => setFilter(f)}>
-                {f === "all" ? "All" : f === "changed" ? "Regraded" : f === "flagged" ? "Flagged" : "Not reviewed"}
+                {f === "all" ? "All" : f === "changed" ? "Regraded" : f === "flagged" ? "Flagged" : "To review"}
               </button>
             ))}
           </div>
@@ -70,7 +70,7 @@ export function ReviewTab({ ctx, userId, setUserId }: { ctx: WorkspaceCtx; userI
             return (
               <div key={s.userId} className={`student-row ${s.userId === student.userId ? "active" : ""}`} onClick={() => setUserId(s.userId)}>
                 <span className="check">{reviewed.has(s.userId) ? "✓" : ""}</span>
-                <span className="grow" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.sortableName}</span>
+                <span className="grow ellipsis">{s.sortableName}</span>
                 {sr.flagged && <span className="dot flag" title="needs review" />}
                 <ScoreChange from={sr.canvasScore} to={sr.newScore} />
               </div>
@@ -78,10 +78,14 @@ export function ReviewTab({ ctx, userId, setUserId }: { ctx: WorkspaceCtx; userI
           })}
           {list.length === 0 && <div className="empty-state small">No students match.</div>}
         </div>
+        <div className="pane-foot">
+          <span><kbd>j</kbd> <kbd>k</kbd> next / previous</span>
+          <span><kbd>r</kbd> mark reviewed</span>
+        </div>
       </div>
 
       <div className="pane grow">
-        <div className="pane-head" style={{ padding: "10px 16px" }}>
+        <div className="pane-head roomy">
           <div className="grow">
             <h2>{student.name}</h2>
             <div className="muted small">
@@ -91,15 +95,15 @@ export function ReviewTab({ ctx, userId, setUserId }: { ctx: WorkspaceCtx; userI
             </div>
           </div>
           <div className="col" style={{ alignItems: "flex-end", gap: 2 }}>
-            <span style={{ fontSize: 18 }}><ScoreChange from={r.canvasScore} to={r.newScore} max={quiz.pointsPossible} /></span>
-            <span className="faint small">{idx + 1} of {list.length}</span>
+            <span className="score big"><ScoreChange from={r.canvasScore} to={r.newScore} max={quiz.pointsPossible} /></span>
+            <span className="muted small">{idx >= 0 ? `Student ${idx + 1} of ${list.length}` : "Not in the filtered list"}</span>
           </div>
-          <button className="btn" disabled={idx <= 0} onClick={() => setUserId(list[idx - 1].userId)} title="Previous (k)">↑</button>
-          <button className="btn" disabled={idx < 0 || idx >= list.length - 1} onClick={() => setUserId(list[idx + 1].userId)} title="Next (j)">↓</button>
+          <button className="btn icon" disabled={idx <= 0} onClick={() => setUserId(list[idx - 1].userId)} title="Previous student (k)" aria-label="Previous student">↑</button>
+          <button className="btn icon" disabled={idx < 0 || idx >= list.length - 1} onClick={() => setUserId(list[idx + 1].userId)} title="Next student (j)" aria-label="Next student">↓</button>
           {reviewed.has(student.userId) ? (
             <button className="btn on" onClick={() => setReviewed(student.userId, false)} title="Toggle (r)">✓ Reviewed</button>
           ) : (
-            <button className="btn primary" onClick={markAndNext} title="Mark reviewed and go to the next unreviewed student (r toggles)">Mark reviewed → next</button>
+            <button className="btn primary" onClick={markAndNext} title="Mark reviewed and go to the next unreviewed student (r toggles)">Mark reviewed &amp; next →</button>
           )}
         </div>
         <div className="pane-body" ref={bodyRef}>
@@ -148,13 +152,13 @@ function QuestionCard({ ctx, q, s, cell, resp }: { ctx: WorkspaceCtx; q: Questio
         <ScoreChange from={cell.status === "untouched" || cell.status === "kept" ? null : cell.canvasPoints} to={cell.score} max={cell.max} />
       </div>
       <div className="qcard-body">
-        <div className={`prompt ${promptOpen ? "open" : ""}`} onClick={() => setPromptOpen(!promptOpen)} title="Click to expand">{q.text}</div>
+        <div className={`prompt ${promptOpen ? "open" : ""}`} onClick={() => setPromptOpen(!promptOpen)} title={promptOpen ? "Click to collapse" : "Click to show the whole question"}>{q.text}</div>
         {ctx.specs.get(q.id)?.note && (
           <div className="notice info small"><span className="muted">Rubric author: </span>{ctx.specs.get(q.id)!.note}</div>
         )}
 
         {cell.parts ? (
-          <table className="grid" style={{ border: "1px solid var(--line)", borderRadius: 6 }}>
+          <table className="grid boxed">
             <thead><tr><th>Blank</th><th>Answer</th><th className="right">Score</th><th>Why</th></tr></thead>
             <tbody>
               {cell.parts.map((p, i) => (
@@ -162,7 +166,7 @@ function QuestionCard({ ctx, q, s, cell, resp }: { ctx: WorkspaceCtx; q: Questio
                   <td className="small muted nowrap">{p.label}</td>
                   <td className="answer-text">{p.text || <span className="faint">(blank)</span>}</td>
                   <td className="right num nowrap">{fmt(p.score)} <span className="faint">/ {fmt(p.max)}</span></td>
-                  <td className="small muted">{p.matched.join("; ")}{p.flags.length ? <div style={{ color: "var(--warn)" }}>{p.flags.join("; ")}</div> : null}</td>
+                  <td className="small muted">{p.matched.join("; ")}{p.flags.length ? <div className="warn-text">{p.flags.join("; ")}</div> : null}</td>
                 </tr>
               ))}
             </tbody>
@@ -175,18 +179,19 @@ function QuestionCard({ ctx, q, s, cell, resp }: { ctx: WorkspaceCtx; q: Questio
         )}
 
         {cell.status !== "untouched" && !cell.parts && (cell.matched.length > 0 || cell.flags.length > 0) && (
-          <ul className="why" style={{ margin: 0, paddingLeft: 18 }}>
+          <ul className="why">
             {cell.matched.map((m, i) => <li key={i}>{m}</li>)}
-            {cell.flags.map((f, i) => <li key={`f${i}`} style={{ color: "var(--warn)" }}>{f}</li>)}
+            {cell.flags.map((f, i) => <li key={`f${i}`} className="warn-text">{f}</li>)}
           </ul>
         )}
         {cell.comments.length > 0 && cell.status !== "override" && <div className="small"><span className="muted">Comment: </span>{cell.comments.join(" ")}</div>}
-        {cell.status === "untouched" && <div className="small faint">Not in the rubric: Canvas's score stands and won't be sent. Override it below to change it anyway.</div>}
+        {cell.status === "untouched" && <div className="small muted">Not in the rubric: Canvas's score stands and won't be sent. Override it below to change it anyway.</div>}
 
         <div className="override">
-          <span className="small muted">Override</span>
-          <input type="number" step="any" placeholder={fmt(cell.score)} value={score}
+          <span className="lbl">Override score</span>
+          <input type="number" step="any" placeholder={fmt(cell.score)} value={score} aria-label={`Override score for question ${q.position}`}
             onChange={(e) => setScore(e.target.value)} onBlur={() => commit()} onKeyDown={(e) => e.key === "Enter" && commit()} />
+          {cell.max != null && <span className="muted small num">/ {fmt(cell.max)}</span>}
           <input type="text" placeholder={ctx.quiz.source === "classic" ? "Comment on this question for the student (optional)" : "Comment for the student (optional, sent as a submission comment)"} value={comment}
             onChange={(e) => setComment(e.target.value)} onBlur={() => commit()} onKeyDown={(e) => e.key === "Enter" && commit()} />
           {ov && <button className="btn sm ghost" onClick={() => { setScore(""); setComment(""); ctx.setOverride(s.userId, q.id, null); }}>Clear</button>}

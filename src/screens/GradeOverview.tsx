@@ -19,21 +19,21 @@ export function RubricPicker({ quiz, rubric }: { quiz: QuizData; rubric: RubricS
           <div className="muted">{quiz.title} · {quiz.students.length} submissions · {quiz.questions.length} questions</div>
         </div>
         <div className="card pad col" style={{ gap: 12 }}>
-          <p style={{ margin: 0 }}>
+          <p>
             Choose the rubric file (<span className="mono">.yaml</span>) for this quiz. Whoever wrote the rubric can send it to you,
             or put it in a shared folder.
           </p>
-          <p className="muted small" style={{ margin: 0 }}>
+          <p className="muted small">
             The rubric only regrades the questions it lists. You'll see every change and can adjust any score before anything goes to Canvas.
           </p>
           <ErrorNote error={rubric.loadError} />
           <div className="row">
-            <button className="btn primary" onClick={rubric.choose} disabled={rubric.loading}>
+            <button className="btn primary lg" onClick={rubric.choose} disabled={rubric.loading}>
               {rubric.loading ? <Spinner /> : null} Choose rubric file…
             </button>
           </div>
         </div>
-        <p className="faint small">Writing rubrics? Switch to <b>Edit rubrics</b> in the top bar.</p>
+        <p className="muted small">Writing rubrics? Switch to <b>Edit rubrics</b> in the top bar.</p>
       </div>
     </div>
   );
@@ -56,7 +56,7 @@ function unmatched(rubric: RubricState): { total: number; missing: number; idKey
 
 function ProblemList({ problems }: { problems: Problem[] }) {
   return (
-    <ul style={{ margin: "6px 0 0", paddingLeft: 18 }} className="small">
+    <ul className="small">
       {problems.map((p, i) => <li key={i}>{p.line ? <span className="mono faint">line {p.line}: </span> : null}{p.message}</li>)}
     </ul>
   );
@@ -85,10 +85,13 @@ export function GradeOverview({ ctx, rubric, canSend, sendTitle, onSend, onExpor
   const firstFlagged = quiz.students.find((s) => flaggedNotReviewed.some((f) => f.userId === s.userId));
   const firstUnreviewed = quiz.students.find((s) => !reviewed.has(s.userId) && results.get(s.userId)?.changed);
 
+  const done1 = flaggedNotReviewed.length === 0;
+  const done2 = changed > 0 && all.filter((x) => x.changed).every((x) => reviewed.has(x.userId));
+
   return (
     <div className="pane grow">
       <div className="pane-body">
-        <div style={{ maxWidth: 980, margin: "0 auto", padding: "20px 20px 40px", display: "flex", flexDirection: "column", gap: 16 }}>
+        <div className="content">
 
           {/* rubric */}
           <div className="card pad col" style={{ gap: 10 }}>
@@ -97,7 +100,7 @@ export function GradeOverview({ ctx, rubric, canSend, sendTitle, onSend, onExpor
                 <div className="muted small">Rubric</div>
                 <h2>{r?.title || (rubric.path ? fileName(rubric.path) : "Unsaved rubric")}</h2>
                 {rubric.path && <div className="faint small mono" title={rubric.path}>{fileName(rubric.path)}</div>}
-                {!rubric.path && <div className="small" style={{ color: "var(--warn)" }}>Unsaved draft from Edit rubrics mode</div>}
+                {!rubric.path && <div className="small warn-text">Unsaved draft from Edit rubrics mode</div>}
               </div>
               {rubric.path && <button className="btn" onClick={rubric.reload} disabled={rubric.loading} title="Re-read the file, e.g. after the author updated it">{rubric.loading ? <Spinner /> : null} Reload</button>}
               <button className="btn" onClick={rubric.choose}>Choose a different rubric…</button>
@@ -129,17 +132,17 @@ export function GradeOverview({ ctx, rubric, canSend, sendTitle, onSend, onExpor
           </div>
 
           {/* next steps */}
-          <div className="card pad col" style={{ gap: 12 }}>
-            <h3>What to do</h3>
-            <Step n={1} done={flaggedNotReviewed.length === 0}
+          <div className="card clip">
+            <div className="card-head" style={{ borderBottom: 0 }}><h3>What to do</h3></div>
+            <Step n={1} done={done1} current={!done1}
               title={flagged.length ? `Check the ${flagged.length} submission${flagged.length === 1 ? "" : "s"} that need review` : "No submissions were flagged for review"}
               detail={flagged.length ? "The rubric couldn't decide these on its own, or the author asked for a person to look. Adjust the score if needed, then mark them reviewed." : undefined}
               action={firstFlagged && <button className="btn primary" onClick={() => goTo("review", { userId: firstFlagged.userId })}>Review flagged</button>} />
-            <Step n={2} done={changed > 0 && all.filter((x) => x.changed).every((x) => reviewed.has(x.userId))}
+            <Step n={2} done={done2} current={done1 && !done2}
               title={`Look over the ${changed} regraded submission${changed === 1 ? "" : "s"}`}
               detail={`${reviewed.size} of ${quiz.students.length} marked reviewed. Use j / k to move between students and r to mark reviewed.`}
               action={firstUnreviewed && <button className="btn" onClick={() => goTo("review", { userId: firstUnreviewed.userId })}>Continue reviewing</button>} />
-            <Step n={3} done={false}
+            <Step n={3} done={false} current={done1 && done2}
               title="Send the new grades to Canvas"
               detail={quiz.source === "new_quizzes_csv"
                 ? "For New Quizzes this updates each student's total score. Grades stay hidden until you post them in Canvas."
@@ -151,8 +154,8 @@ export function GradeOverview({ ctx, rubric, canSend, sendTitle, onSend, onExpor
           </div>
 
           {/* what it grades */}
-          <div className="card">
-            <div className="row" style={{ padding: "12px 16px", borderBottom: "1px solid var(--line)" }}>
+          <div className="card clip">
+            <div className="card-head">
               <h3 className="grow">What this rubric regrades</h3>
               <span className="muted small">{graded.length} of {quiz.questions.length} questions. The other {quiz.questions.length - graded.length} keep their Canvas scores.</span>
             </div>
@@ -171,7 +174,7 @@ export function GradeOverview({ ctx, rubric, canSend, sendTitle, onSend, onExpor
                       </td>
                       <td className="small">{describeSpec(spec)}</td>
                       <td className="right num">{ch || <span className="faint">0</span>}</td>
-                      <td className="right num" style={fl ? { color: "var(--warn)", fontWeight: 600 } : undefined}>{fl || <span className="faint">0</span>}</td>
+                      <td className={`right num ${fl ? "warn-text" : ""}`} style={fl ? { fontWeight: 650 } : undefined}>{fl || <span className="faint">0</span>}</td>
                     </tr>
                   );
                 })}
@@ -185,15 +188,12 @@ export function GradeOverview({ ctx, rubric, canSend, sendTitle, onSend, onExpor
   );
 }
 
-function Step({ n, done, title, detail, action }: { n: number; done: boolean; title: string; detail?: string; action?: ReactNode }) {
+function Step({ n, done, current, title, detail, action }: { n: number; done: boolean; current: boolean; title: string; detail?: string; action?: ReactNode }) {
   return (
-    <div className="row" style={{ alignItems: "flex-start", gap: 12 }}>
-      <span style={{
-        width: 24, height: 24, borderRadius: "50%", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center",
-        fontSize: 12, fontWeight: 600, background: done ? "var(--good-soft)" : "var(--accent-soft)", color: done ? "var(--good)" : "var(--accent)",
-      }}>{done ? "✓" : n}</span>
+    <div className={`step ${done ? "done" : current ? "current" : ""}`}>
+      <span className="n">{done ? "✓" : n}</span>
       <div className="grow">
-        <div style={{ fontWeight: 500 }}>{title}</div>
+        <div className="title">{title}</div>
         {detail && <div className="muted small">{detail}</div>}
       </div>
       {action}

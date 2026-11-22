@@ -10,8 +10,6 @@ export function SendDialog({ ctx, onClose }: { ctx: WorkspaceCtx; onClose: () =>
   const { quiz, results, reviewed } = ctx;
   const nq = quiz.source === "new_quizzes_csv";
   const nqApi = quiz.source === "new_quizzes_api";
-  /** New Quizzes per-question saving is new: ask for an explicit OK the first time per send. */
-  const [untestedOk, setUntestedOk] = useState(false);
   const [onlyReviewed, setOnlyReviewed] = useState(reviewed.size > 0);
   const [summaryComment, setSummaryComment] = useState(false);
   const [postManually, setPostManually] = useState<boolean | null>(null);
@@ -60,13 +58,13 @@ export function SendDialog({ ctx, onClose }: { ctx: WorkspaceCtx; onClose: () =>
 
   return (
     <Modal
-      title={stage === "done" ? "Done" : `Send to Canvas: ${quiz.title}`}
+      title={stage === "done" ? "Finished sending" : stage === "running" ? "Sending to Canvas…" : `Send to Canvas: ${quiz.title}`}
       onClose={stage === "running" ? undefined : onClose}
       footer={
         stage === "plan" ? (
           <>
             <button className="btn" onClick={onClose}>Cancel</button>
-            <button className="btn primary" disabled={!confirmed || sendable.length === 0 || postManually == null || (nqApi && (!untestedOk || !!quiz.readOnly))} onClick={run}>
+            <button className="btn primary" disabled={!confirmed || sendable.length === 0 || postManually == null || (nqApi && !!quiz.readOnly)} onClick={run}>
               Send {sendable.length} update{sendable.length === 1 ? "" : "s"}
             </button>
           </>
@@ -86,14 +84,8 @@ export function SendDialog({ ctx, onClose }: { ctx: WorkspaceCtx; onClose: () =>
                 and New Quizzes then updates the Canvas total. Other questions aren't changed. Comments are added as a Canvas submission comment.
                 Before saving, each attempt is re-read; anyone whose scores changed since you loaded the quiz is skipped.
               </div>
-              {quiz.readOnly ? (
+              {quiz.readOnly && (
                 <div className="notice bad small">New Quizzes reports this quiz as read-only (for example, the course has concluded), so nothing can be saved.</div>
-              ) : (
-                <div className="notice warn small col" style={{ gap: 6 }}>
-                  <div><b>New feature.</b> Saving per-question scores to New Quizzes uses New Quizzes' internal grading API (what SpeedGrader uses), which
-                    Instructure doesn't document and could change. It has been tested on a Test Student attempt. If a save doesn't stick, the result says so; check that attempt in SpeedGrader.</div>
-                  <label className="row"><input type="checkbox" checked={untestedOk} onChange={(e) => setUntestedOk(e.target.checked)} /> Save these scores in New Quizzes</label>
-                </div>
               )}
             </div>
           ) : nq ? (
@@ -121,12 +113,13 @@ export function SendDialog({ ctx, onClose }: { ctx: WorkspaceCtx; onClose: () =>
 
           <div className="col small">
             <label className="row"><input type="checkbox" checked={onlyReviewed} onChange={(e) => setOnlyReviewed(e.target.checked)} /> Only send students marked reviewed ({reviewed.size})</label>
-            {!onlyReviewed && unreviewedChanged > 0 && <div className="faint" style={{ marginLeft: 22 }}>{unreviewedChanged} regraded student(s) haven't been reviewed.</div>}
-            {nq && <div className="faint" style={{ marginLeft: 0 }}>Comments from the rubric or your overrides are sent as one submission comment per student (New Quizzes has no per-question comments). Students see it once grades are posted.</div>}
+            {!onlyReviewed && unreviewedChanged > 0 && <div className="warn-text" style={{ marginLeft: 23 }}>{unreviewedChanged} regraded student(s) haven't been reviewed.</div>}
+            {nq && <div className="muted">Comments from the rubric or your overrides are sent as one submission comment per student (New Quizzes has no per-question comments). Students see it once grades are posted.</div>}
             {nq && <label className="row"><input type="checkbox" checked={summaryComment} onChange={(e) => setSummaryComment(e.target.checked)} /> Also list the per-question score changes in that comment</label>}
           </div>
 
-          <div className="card" style={{ maxHeight: 280, overflow: "auto" }}>
+          <h3>What will be sent</h3>
+          <div className="card" style={{ maxHeight: 280, overflow: "auto", flexShrink: 0 }}>
             <table className="grid">
               <thead><tr><th>Student</th><th>Changes</th><th className="right">Total</th></tr></thead>
               <tbody>
@@ -135,8 +128,8 @@ export function SendDialog({ ctx, onClose }: { ctx: WorkspaceCtx; onClose: () =>
                     <td className="nowrap">{p.name}{p.blocked && <div className="small error-text">{p.blocked}</div>}</td>
                     <td className="small">
                       {p.questions.filter((q) => q.from == null || Math.abs(q.to - q.from) > 1e-3).map((q) => `Q${q.position}: ${fmt(q.from)}→${fmt(q.to)}`).join(", ")}
-                      {p.summaryComment && <div className="muted" style={{ whiteSpace: "pre-wrap", marginTop: 2 }}>💬 {p.summaryComment}</div>}
-                      {!p.summaryComment && p.questions.some((q) => q.comment) && <div className="muted" style={{ marginTop: 2 }}>💬 {p.questions.filter((q) => q.comment).map((q) => `Q${q.position}: ${q.comment}`).join(" · ")}</div>}
+                      {p.summaryComment && <div className="muted" style={{ whiteSpace: "pre-wrap", marginTop: 2 }}><b>Comment:</b> {p.summaryComment}</div>}
+                      {!p.summaryComment && p.questions.some((q) => q.comment) && <div className="muted" style={{ marginTop: 2 }}><b>Comment:</b> {p.questions.filter((q) => q.comment).map((q) => `Q${q.position}: ${q.comment}`).join(" · ")}</div>}
                     </td>
                     <td className="right"><ScoreChange from={p.canvasScore} to={p.newScore} /></td>
                   </tr>
@@ -146,8 +139,8 @@ export function SendDialog({ ctx, onClose }: { ctx: WorkspaceCtx; onClose: () =>
             </table>
           </div>
           <ErrorNote error={error} />
-          <label className="row"><input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} /> I've reviewed these changes and want to write them to Canvas.</label>
-          <div className="faint small">A backup of the current Canvas scores is saved before anything is sent.</div>
+          <label className="row confirm"><input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} /> I've reviewed these changes and want to write them to Canvas.</label>
+          <div className="muted small">A backup of the current Canvas scores is saved before anything is sent.</div>
         </>
       )}
 
@@ -161,7 +154,7 @@ export function SendDialog({ ctx, onClose }: { ctx: WorkspaceCtx; onClose: () =>
           <div className="card" style={{ maxHeight: 300, overflow: "auto" }}>
             {log.map((l) => (
               <div key={l.userId} className="row small" style={{ padding: "5px 10px", borderBottom: "1px solid var(--line)" }}>
-                <span style={{ color: l.ok ? "var(--good)" : "var(--bad)", width: 14 }}>{l.ok ? "✓" : "✕"}</span>
+                <span style={{ color: l.ok ? "var(--good)" : "var(--bad)", width: 14, fontWeight: 700 }}>{l.ok ? "✓" : "✕"}</span>
                 <span className="nowrap">{l.name}</span>
                 <span className="muted grow">{l.message}</span>
               </div>

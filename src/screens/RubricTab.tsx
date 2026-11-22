@@ -1,7 +1,8 @@
-import { useRef, useState, type KeyboardEvent } from "react";
+import { useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { readTextFile, writeTextFile } from "../lib/canvas";
 import type { Problem } from "../lib/rubric";
+import { highlightYaml } from "../lib/highlight";
 import { buildTemplate } from "../lib/template";
 import { truncate } from "../lib/text";
 import { ErrorNote, Modal } from "../components/ui";
@@ -21,6 +22,8 @@ export function RubricTab({ ctx, text, setText, path, setPath, dirty, markSaved,
 }) {
   const ta = useRef<HTMLTextAreaElement>(null);
   const gutter = useRef<HTMLDivElement>(null);
+  const colored = useRef<HTMLElement>(null);
+  const tokens = useMemo(() => highlightYaml(text), [text]);
   const [error, setError] = useState<string | null>(null);
   const [confirmTemplate, setConfirmTemplate] = useState(false);
   const { quiz, specs, results } = ctx;
@@ -122,10 +125,11 @@ export function RubricTab({ ctx, text, setText, path, setPath, dirty, markSaved,
           <button className="btn sm" onClick={() => doSave()}>{path ? "Save" : "Save…"}</button>
           <button className="btn sm ghost" onClick={() => doSave(true)}>Save as…</button>
           <button className="btn sm ghost" onClick={() => setConfirmTemplate(true)}>New from quiz</button>
-          <span className="muted small mono grow" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={path ?? ""}>
-            {path ? path.split(/[\\/]/).pop() : "unsaved rubric"}{dirty ? " •" : ""}
+          <span className="muted small mono grow ellipsis" title={path ?? ""}>
+            {path ? path.split(/[\\/]/).pop() : "unsaved rubric"}
           </span>
-          <span className="faint small"><kbd>⌘/</kbd> comment · <kbd>⌘S</kbd> save</span>
+          {dirty && <span className="badge warn">Unsaved changes</span>}
+          <span className="muted small"><kbd>⌘/</kbd> comment · <kbd>⌘S</kbd> save</span>
         </div>
         <ErrorNote error={error} />
         <div className="editor">
@@ -134,6 +138,12 @@ export function RubricTab({ ctx, text, setText, path, setPath, dirty, markSaved,
               <div key={i} className={lineLevel.get(i + 1) ?? ""}>{i + 1}</div>
             ))}
           </div>
+          <div className="code">
+          <pre className="hl" aria-hidden><code ref={colored}>
+            {tokens.map((line, i) => (
+              <span key={i}>{line.map((t, j) => (t.kind === "plain" ? t.text : <span key={j} className={`t-${t.kind}`}>{t.text}</span>))}{"\n"}</span>
+            ))}
+          </code></pre>
           <textarea
             ref={ta}
             value={text}
@@ -142,19 +152,24 @@ export function RubricTab({ ctx, text, setText, path, setPath, dirty, markSaved,
             autoCorrect="off"
             onChange={(e) => setText(e.target.value)}
             onKeyDown={onKey}
-            onScroll={(e) => { if (gutter.current) gutter.current.scrollTop = e.currentTarget.scrollTop; }}
+            onScroll={(e) => {
+              const { scrollTop, scrollLeft } = e.currentTarget;
+              if (gutter.current) gutter.current.scrollTop = scrollTop;
+              if (colored.current) colored.current.style.transform = `translate(${-scrollLeft}px, ${-scrollTop}px)`;
+            }}
           />
+          </div>
         </div>
         <div className="problems">
           {problems.length === 0 ? (
-            <div className="problem"><span className="good" style={{ color: "var(--good)" }}>✓</span><span className="muted">Rubric is valid.</span></div>
+            <div className="problem summary"><span className="good-text" style={{ fontWeight: 700 }}>✓</span><span>Rubric is valid.</span></div>
           ) : (
             <>
-              <div className="problem muted small" style={{ cursor: "default" }}>{errors} error{errors === 1 ? "" : "s"}, {warnings} warning{warnings === 1 ? "" : "s"}{errors ? ". Grading uses the last valid parts; sending is disabled until errors are fixed." : ""}</div>
+              <div className="problem summary">{errors} error{errors === 1 ? "" : "s"}, {warnings} warning{warnings === 1 ? "" : "s"}{errors ? ". Grading uses the last valid parts; sending is disabled until errors are fixed." : ""}</div>
               {problems.map((p, i) => (
                 <div key={i} className={`problem ${p.level}`} onClick={() => p.line && jump(p.line)}>
                   <span className="lvl">{p.level === "error" ? "Error" : "Warn"}</span>
-                  {p.line && <span className="faint mono">L{p.line}</span>}
+                  {p.line && <span className="muted mono" title="Click to jump to this line">line {p.line}</span>}
                   <span>{p.message}</span>
                 </div>
               ))}
@@ -164,7 +179,7 @@ export function RubricTab({ ctx, text, setText, path, setPath, dirty, markSaved,
       </div>
 
       <div className="pane split-right">
-        <div className="pane-head"><h3>Coverage</h3><span className="muted small">click to see answers</span></div>
+        <div className="pane-head"><h3 className="grow">Questions</h3><span className="muted small">Click one to see its answers</span></div>
         <div className="pane-body">
           {quiz.questions.map((q) => {
             const spec = specs.get(q.id);
@@ -201,7 +216,7 @@ export function RubricTab({ ctx, text, setText, path, setPath, dirty, markSaved,
       {confirmTemplate && (
         <Modal title="Replace the rubric with a template?" onClose={() => setConfirmTemplate(false)}
           footer={<><button className="btn" onClick={() => setConfirmTemplate(false)}>Cancel</button><button className="btn primary" onClick={newFromQuiz}>Replace</button></>}>
-          <p style={{ margin: 0 }}>This lists every question in <b>{quiz.title}</b> with a starter rule and the most common answers students gave. Every question starts commented out, so nothing is regraded until you enable it.</p>
+          <p>This lists every question in <b>{quiz.title}</b> with a starter rule and the most common answers students gave. Every question starts commented out, so nothing is regraded until you enable it.</p>
           {dirty && <div className="notice warn">The current rubric has unsaved changes that will be lost.</div>}
         </Modal>
       )}

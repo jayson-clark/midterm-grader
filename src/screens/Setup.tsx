@@ -59,11 +59,21 @@ export function ConnectScreen({ settings, notice, onSaved, onOffline }: {
   }
 
   const signedIn = settings?.auth_mode === "session";
+  // Still signed in from before? Say so, and offer to carry on without signing in again.
+  const [me, setMe] = useState<string | null | false>(null);
+  useEffect(() => {
+    if (!signedIn || notice) return;
+    let live = true;
+    whoAmI().then((m) => live && setMe(m.name)).catch(() => live && setMe(false));
+    return () => { live = false; };
+  }, [signedIn, notice]);
+  const sameUrl = url.trim().replace(/\/+$/, "") === (settings?.base_url ?? "").replace(/\/+$/, "");
+  const canContinue = signedIn && !notice && me !== false && sameUrl;
 
   return (
     <div className="center-page">
       <div className="inner narrow">
-        <div>
+        <div className="col" style={{ gap: 6 }}>
           <h1>Connect to Canvas</h1>
           <p className="muted">Midterm Grader reads quiz answers from Canvas, grades them with a rubric, and lets you review every submission before anything is sent back.</p>
         </div>
@@ -80,9 +90,21 @@ export function ConnectScreen({ settings, notice, onSaved, onOffline }: {
               <div><button className="btn sm" onClick={() => { cancelled.current = true; setWaiting(false); }}>Cancel</button></div>
             </div>
           ) : (
-            <div className="col" style={{ gap: 6 }}>
+            <div className="col" style={{ gap: 10 }}>
+              {canContinue && (
+                <div className="notice good row">
+                  {me ? <span className="grow">You're already signed in as <b>{me}</b>.</span>
+                    : <><Spinner /> <span className="grow">Checking your Canvas sign-in…</span></>}
+                </div>
+              )}
+              {signedIn && !notice && me === false && (
+                <div className="notice warn">Your Canvas sign-in has ended. Sign in again to continue.</div>
+              )}
               <div className="row">
-                <button className="btn primary" onClick={signIn} disabled={!url}>
+                {canContinue && (
+                  <button className="btn primary lg" disabled={!me} onClick={() => onSaved(settings!)}>Continue →</button>
+                )}
+                <button className={`btn ${canContinue ? "" : "primary lg"}`} onClick={signIn} disabled={!url}>
                   {signedIn ? "Sign in again" : "Sign in with Canvas"}
                 </button>
                 {signedIn && (
@@ -99,7 +121,7 @@ export function ConnectScreen({ settings, notice, onSaved, onOffline }: {
         </div>
 
         <div className="card pad col" style={{ gap: 12 }}>
-          <button className="btn ghost" style={{ alignSelf: "flex-start", padding: 0 }} onClick={() => setShowToken(!showToken)}>
+          <button className="btn link" style={{ alignSelf: "flex-start" }} aria-expanded={showToken} onClick={() => setShowToken(!showToken)}>
             {showToken ? "▾" : "▸"} Use an access token instead
           </button>
           {showToken && (
@@ -110,7 +132,7 @@ export function ConnectScreen({ settings, notice, onSaved, onOffline }: {
                 <span className="hint">In Canvas: Account → Settings → <b>+ New Access Token</b>. It's stored only on this computer and only sent to the Canvas URL above.</span>
               </label>
               <div className="row">
-                <button className="btn" onClick={connectWithToken} disabled={busy || !url || (!token && !settings?.has_token)}>
+                <button className={`btn ${settings?.auth_mode === "token" ? "primary" : ""}`} onClick={connectWithToken} disabled={busy || !url || (!token && !settings?.has_token)}>
                   {busy ? <Spinner /> : null} {settings?.has_token && !token ? "Continue with saved token" : "Connect with token"}
                 </button>
                 {settings?.has_token && (
@@ -123,9 +145,9 @@ export function ConnectScreen({ settings, notice, onSaved, onOffline }: {
           )}
         </div>
 
-        <button className="btn ghost" style={{ alignSelf: "flex-start" }} onClick={onOffline}>
-          Or grade a New Quizzes report CSV without connecting →
-        </button>
+        <div className="muted small">
+          No Canvas access? <button className="btn link" onClick={onOffline}>Grade a New Quizzes report CSV without connecting →</button>
+        </div>
       </div>
     </div>
   );
@@ -151,26 +173,28 @@ export function CoursesScreen({ onPick }: { onPick: (c: Course) => void }) {
   return (
     <div className="center-page">
       <div className="inner">
-        <div className="row">
-          <h1 className="grow">Which course?</h1>
-          <input type="search" placeholder="Filter" value={q} onChange={(e) => setQ(e.target.value)} autoFocus />
+        <div className="page-head">
+          <div className="grow">
+            <h1>Choose a course</h1>
+            <div className="sub">Courses where you're a teacher or TA.</div>
+          </div>
+          <input type="search" placeholder="Filter courses" aria-label="Filter courses" value={q} onChange={(e) => setQ(e.target.value)} autoFocus />
         </div>
         <ErrorNote error={error} />
         <div className="card list">
           {!courses && !error && <div className="empty-state"><Spinner /></div>}
           {courses && shown.length === 0 && <div className="empty-state">No courses where you're a teacher or TA{q ? " match that filter" : ""}.</div>}
           {shown.map((c) => (
-            <button key={c.id} className="list-item" onClick={() => onPick(c)} style={c.canGrade ? undefined : { opacity: 0.6 }}>
+            <button key={c.id} className={`list-item ${c.canGrade ? "" : "dim"}`} onClick={() => onPick(c)}>
               <div className="grow">
-                <div style={{ fontWeight: 500 }}>{c.name}</div>
-                <div className="muted small">
-                  {c.course_code}{c.term?.name ? ` · ${c.term.name}` : ""}
-                  {c.invited && " · You haven't accepted the course invitation in Canvas yet, so grading won't work until you do."}
-                  {!c.canGrade && " · You're not a teacher or TA here, so you probably can't grade it."}
-                </div>
+                <div className="title">{c.name}</div>
+                <div className="muted small">{c.course_code}{c.term?.name ? ` · ${c.term.name}` : ""}</div>
+                {c.invited && <div className="warn-text small">You haven't accepted the course invitation in Canvas yet, so grading won't work until you do.</div>}
+                {!c.canGrade && <div className="warn-text small">You're not a teacher or TA here, so you probably can't grade it.</div>}
               </div>
-              {c.invited && <span className="badge">Invited</span>}
+              {c.invited && <span className="badge warn">Invited</span>}
               {c.roles.map((r) => <span key={r} className="badge">{ROLE_NAMES[r] ?? r}</span>)}
+              <span className="chev" aria-hidden>›</span>
             </button>
           ))}
         </div>
@@ -198,21 +222,21 @@ export function AssignmentsScreen({ course, onPick }: { course: Course; onPick: 
   return (
     <div className="center-page">
       <div className="inner">
-        <div className="row">
+        <div className="page-head">
           <div className="grow">
-            <h1>Which quiz?</h1>
-            <div className="muted">{course.name}</div>
+            <h1>Choose a quiz</h1>
+            <div className="sub">{course.name}</div>
           </div>
-          <input type="search" placeholder="Filter" value={q} onChange={(e) => setQ(e.target.value)} autoFocus />
+          <input type="search" placeholder="Filter quizzes" aria-label="Filter quizzes" value={q} onChange={(e) => setQ(e.target.value)} autoFocus />
         </div>
         <ErrorNote error={error} />
         <div className="card list">
           {!list && !error && <div className="empty-state"><Spinner /></div>}
-          {list && shown.length === 0 && <div className="empty-state">No quizzes found.</div>}
+          {list && shown.length === 0 && <div className="empty-state">{q ? "No quizzes match that filter." : "No quizzes found in this course."}</div>}
           {shown.map((a) => (
             <button key={a.id} className="list-item" onClick={() => onPick(a)}>
               <div className="grow">
-                <div style={{ fontWeight: 500 }}>{a.name}</div>
+                <div className="title">{a.name}</div>
                 <div className="muted small">
                   {fmt(a.points_possible)} pts{a.due_at ? ` · due ${new Date(a.due_at).toLocaleDateString()}` : ""}
                   {a.needs_grading_count ? ` · ${a.needs_grading_count} need grading` : ""}
@@ -221,6 +245,7 @@ export function AssignmentsScreen({ course, onPick }: { course: Course; onPick: 
               {!a.published && <span className="badge">unpublished</span>}
               {a.post_manually ? <span className="badge">manual posting</span> : <span className="badge warn">auto-posts grades</span>}
               <span className={`badge ${a.flavor === "classic" ? "accent" : ""}`}>{a.flavor === "classic" ? "Classic quiz" : "New Quiz"}</span>
+              <span className="chev" aria-hidden>›</span>
             </button>
           ))}
         </div>
@@ -238,7 +263,7 @@ export function ClassicLoadScreen({ course, assignment, onLoaded }: { course: Co
     <div className="center-page">
       <div className="inner narrow">
         <h1>{assignment.name}</h1>
-        {error ? <ErrorNote error={error} /> : <div className="row muted"><Spinner /> Loading questions and submissions…</div>}
+        {error ? <ErrorNote error={error} /> : <div className="card pad row"><Spinner /> Loading questions and submissions…</div>}
       </div>
     </div>
   );
@@ -286,7 +311,7 @@ export function NewQuizLoadScreen({ course, assignment, onLoaded, onUseCsv }: {
           <div className="card pad col" style={{ gap: 10 }}>
             <div className="row"><Spinner /> {progress.phase}{progress.total ? `: ${progress.done} of ${progress.total} students` : "…"}</div>
             {pct != null && <div className="progress"><div style={{ width: `${pct}%` }} /></div>}
-            <button className="btn ghost sm" style={{ alignSelf: "flex-start" }} onClick={onUseCsv}>Use a Student Analysis CSV instead</button>
+            <div className="muted small">Taking too long? <button className="btn link" onClick={onUseCsv}>Use a Student Analysis CSV instead</button></div>
           </div>
         )}
       </div>
@@ -361,7 +386,7 @@ export function CsvLoadScreen({ course, assignment, onLoaded }: {
         </div>
         <div className="card pad col">
           <h3>Load the Student Analysis report</h3>
-          <p className="muted" style={{ margin: 0 }}>
+          <p className="muted">
             Canvas doesn't share New Quizzes answers through its API, so this works from the report Canvas exports.
           </p>
           <ol className="steps">
@@ -370,7 +395,7 @@ export function CsvLoadScreen({ course, assignment, onLoaded }: {
             <li>Load it here.</li>
           </ol>
           <div className="row">
-            <button className="btn primary" onClick={pick} disabled={busy}>{busy ? <Spinner /> : null} Choose CSV…</button>
+            <button className={`btn ${quiz ? "" : "primary"}`} onClick={pick} disabled={busy}>{busy ? <Spinner /> : null} {quiz ? "Choose a different CSV…" : "Choose CSV…"}</button>
             {path && <span className="muted small mono">{path.split(/[\\/]/).pop()}</span>}
           </div>
           <ErrorNote error={error} />
@@ -394,7 +419,7 @@ export function CsvLoadScreen({ course, assignment, onLoaded }: {
               </div>
             )}
             {quiz.notes.map((n) => <div key={n} className="notice info small">{n}</div>)}
-            <div className="row"><button className="btn primary" disabled={!!wrongFile} onClick={() => onLoaded(quiz)}>Start grading →</button></div>
+            <div className="row"><button className="btn primary lg" disabled={!!wrongFile} onClick={() => onLoaded(quiz)}>Start grading →</button></div>
           </div>
         )}
       </div>

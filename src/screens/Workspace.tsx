@@ -199,16 +199,16 @@ export function Workspace({ quiz, mode }: { quiz: QuizData; mode: Mode }) {
             <button key={t} className={`tab ${tab === t ? "active" : ""}`} onClick={() => setTab(t)}>
               {TAB_LABEL[t]}
               {(t === "rubric" || t === "overview") && hasErrors && <span className="dot flag" />}
-              {t === "review" && <span className="faint small">{reviewed.size}/{quiz.students.length}</span>}
+              {t === "review" && <span className="count num" title={`${reviewed.size} of ${quiz.students.length} students marked reviewed`}>{reviewed.size}/{quiz.students.length}</span>}
             </button>
           ))}
         </div>
         <div className="stats">
-          <span><b>{quiz.students.length}</b> students</span>
-          <span><b>{graded}</b>/{quiz.questions.length} questions in rubric</span>
-          <span><b>{changed}</b> regraded</span>
-          {flagged > 0 && <span style={{ color: "var(--warn)" }}><b style={{ color: "inherit" }}>{flagged}</b> need review</span>}
-          <span>avg <ScoreChange from={avg("canvasScore")} to={avg("newScore")} /></span>
+          <div className="stat"><b>{quiz.students.length}</b><span className="lbl">students</span></div>
+          <div className="stat" title={`The rubric regrades ${graded} of this quiz's ${quiz.questions.length} questions`}><b>{graded}<span className="of"> / {quiz.questions.length}</span></b><span className="lbl">questions in rubric</span></div>
+          <div className="stat"><b>{changed}</b><span className="lbl">regraded</span></div>
+          {flagged > 0 && <div className="stat warn"><b>{flagged}</b><span className="lbl">need review</span></div>}
+          <div className="stat" title="Average total score: Canvas now, then with the rubric applied"><b><ScoreChange from={avg("canvasScore")} to={avg("newScore")} /></b><span className="lbl">average score</span></div>
         </div>
         <div className="spacer" />
         <button className="btn" onClick={exportCsv}>Export CSV</button>
@@ -253,7 +253,7 @@ function Gradebook({ ctx }: { ctx: WorkspaceCtx }) {
         <label className="row small muted"><input type="checkbox" checked={onlyRubric} onChange={(e) => setOnlyRubric(e.target.checked)} /> Only rubric questions</label>
       </div>
       <div className="pane-body">
-        <table className="grid">
+        <table className="grid fit">
           <thead>
             <tr>
               <th className="sticky">Student</th>
