@@ -40,14 +40,15 @@ export function RubricPicker({ quiz, rubric }: { quiz: QuizData; rubric: RubricS
 }
 
 /** Rubric keys that point at questions not in this quiz. */
-function unmatched(rubric: RubricState, quiz: QuizData): { total: number; missing: number; idKeys: number; idMissing: number } {
-  const keys = rubric.parsed.rubric?.questionKeys ?? [];
-  const ids = new Set(quiz.questions.map((q) => q.id));
+function unmatched(rubric: RubricState): { total: number; missing: number; idKeys: number; idMissing: number } {
+  const r = rubric.parsed.rubric;
+  const keys = r?.questionKeys ?? [];
   let missing = 0, idKeys = 0, idMissing = 0;
   for (const k of keys) {
-    const pos = /^(?:q|#)\s*(\d+)$/i.exec(k.trim());
-    const ok = ids.has(k.trim()) || (pos != null && Number(pos[1]) >= 1 && Number(pos[1]) <= quiz.questions.length);
-    if (!pos) { idKeys++; if (!ok) idMissing++; }
+    const ok = rubric.keyMatches.get(k) != null;
+    // Keys checked by question text count as content matches, not ids.
+    const byId = !/^(?:q|#)\s*\d+$/i.test(k.trim()) && !r?.questions[k]?.prompt;
+    if (byId) { idKeys++; if (!ok) idMissing++; }
     if (!ok) missing++;
   }
   return { total: keys.length, missing, idKeys, idMissing };
@@ -73,7 +74,7 @@ export function GradeOverview({ ctx, rubric, canSend, sendTitle, onSend, onExpor
   const r = rubric.parsed.rubric;
   const errors = rubric.problems.filter((p) => p.level === "error");
   const warnings = rubric.problems.filter((p) => p.level === "warning");
-  const um = unmatched(rubric, quiz);
+  const um = unmatched(rubric);
   const wrongQuiz = um.idKeys > 0 && um.idMissing === um.idKeys;
 
   const all = [...results.values()];

@@ -136,13 +136,17 @@ export function CoursesScreen({ onPick }: { onPick: (c: Course) => void }) {
   const [error, setError] = useState<string | null>(null);
   const [q, setQ] = useState("");
   const [showArchived, setShowArchived] = useState(false);
+  const [showOther, setShowOther] = useState(false);
   useEffect(() => {
     gradingCourses().then(setCourses).catch((e) => setError(e.message));
   }, []);
-  const shown = useMemo(() => (courses ?? []).filter((c) =>
-    (showArchived || (c.workflow_state !== "completed" && !/archived/i.test(c.name))) &&
-    `${c.name} ${c.course_code} ${c.term?.name ?? ""}`.toLowerCase().includes(q.toLowerCase())), [courses, q, showArchived]);
-  const hidden = (courses?.length ?? 0) - (courses ?? []).filter((c) => c.workflow_state !== "completed" && !/archived/i.test(c.name)).length;
+  const archived = (c: Course) => c.workflow_state === "completed" || /archived/i.test(c.name);
+  const matches = (c: Course) => `${c.name} ${c.course_code} ${c.term?.name ?? ""}`.toLowerCase().includes(q.toLowerCase());
+  const all = courses ?? [];
+  const shown = useMemo(() => all.filter((c) =>
+    (showArchived || !archived(c)) && (showOther || c.canGrade) && matches(c)), [courses, q, showArchived, showOther]);
+  const hidden = all.filter((c) => (showOther || c.canGrade) && archived(c)).length;
+  const other = all.filter((c) => !c.canGrade && (showArchived || !archived(c))).length;
 
   return (
     <div className="center-page">
@@ -156,15 +160,23 @@ export function CoursesScreen({ onPick }: { onPick: (c: Course) => void }) {
           {!courses && !error && <div className="empty-state"><Spinner /></div>}
           {courses && shown.length === 0 && <div className="empty-state">No courses where you're a teacher or TA{q ? " match that filter" : ""}.</div>}
           {shown.map((c) => (
-            <button key={c.id} className="list-item" onClick={() => onPick(c)}>
+            <button key={c.id} className="list-item" onClick={() => onPick(c)} style={c.canGrade ? undefined : { opacity: 0.6 }}>
               <div className="grow">
                 <div style={{ fontWeight: 500 }}>{c.name}</div>
-                <div className="muted small">{c.course_code}{c.term?.name ? ` · ${c.term.name}` : ""}</div>
+                <div className="muted small">
+                  {c.course_code}{c.term?.name ? ` · ${c.term.name}` : ""}
+                  {c.invited && " · You haven't accepted the course invitation in Canvas yet, so grading won't work until you do."}
+                  {!c.canGrade && " · You're not a teacher or TA here, so you probably can't grade it."}
+                </div>
               </div>
-              {c.roles.map((r) => <span key={r} className="badge">{r === "ta" ? "TA" : "Teacher"}</span>)}
+              {c.invited && <span className="badge">Invited</span>}
+              {c.roles.map((r) => <span key={r} className="badge">{ROLE_NAMES[r] ?? r}</span>)}
             </button>
           ))}
         </div>
+        {other > 0 && (
+          <label className="row muted small"><input type="checkbox" checked={showOther} onChange={(e) => setShowOther(e.target.checked)} /> Show {other} course{other === 1 ? "" : "s"} where you're not a teacher or TA</label>
+        )}
         {hidden > 0 && (
           <label className="row muted small"><input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} /> Show {hidden} archived / concluded course{hidden === 1 ? "" : "s"}</label>
         )}
@@ -172,6 +184,8 @@ export function CoursesScreen({ onPick }: { onPick: (c: Course) => void }) {
     </div>
   );
 }
+
+const ROLE_NAMES: Record<string, string> = { teacher: "Teacher", ta: "TA", designer: "Designer", student: "Student", observer: "Observer" };
 
 export function AssignmentsScreen({ course, onPick }: { course: Course; onPick: (a: AssignmentInfo) => void }) {
   const [list, setList] = useState<AssignmentInfo[] | null>(null);

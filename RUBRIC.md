@@ -61,7 +61,29 @@ Canvas's own type names work too (`essay_question`, `rich-fill-blank`, …).
 | `order`, `scoring` | For ordering (Parsons) questions: one pattern per piece in the correct order, and `position` or `sequence` partial credit (see below). |
 | `use: canvas` | Listed, but keep Canvas's score (handy to mark "looked at, leave it"). |
 | `note` | A note for graders, shown next to this question in Grade mode and on every review card. |
+| `prompt` | A regex for a phrase from the question's text (case-insensitive, whitespace collapsed). Checks the entry landed on the right question, and finds it when ids or order differ. See [One rubric for every section](#one-rubric-for-every-section). |
 | `case_sensitive`, `whitespace`, `blank_answers` | Override the settings for this question. |
+
+## One rubric for every section
+
+Each section's copy of a quiz (and a Friday version made by copying Thursday's) gets its own
+question ids, so a rubric keyed by id only fits the quiz it was made from. To share one rubric:
+
+```yaml
+questions:
+  Q35:                               # key by position, not id
+    prompt: '45, 52, and 0'          # and check the question's text
+    blanks: ['^1$', '^2$', '^0$']
+```
+
+- The question at that position (or id) is used if its text matches `prompt`.
+- If it doesn't, the one question in the quiz whose text matches is used instead, with a note on
+  Overview ("Q35 doesn't match its prompt; using Q36").
+- If no question matches, or several do, that's an error and nothing can be sent until the
+  rubric is fixed, so a rubric never silently grades the wrong question.
+
+Pick a phrase that's distinctive and unlikely to be reworded: a variable name, a filename, the
+inputs. A small wording change elsewhere in the question doesn't matter.
 
 ## Rules
 

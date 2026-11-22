@@ -227,3 +227,48 @@ describe("ordering questions", () => {
     expect(c.flags).toEqual(["piece 3 doesn't match any pattern under order:"]);
   });
 });
+
+describe("prompt: matching by question text", () => {
+  const mk = (id: string, position: number, text: string): Question => ({
+    id, position, kind: "fill_blank", rawType: "rich-fill-blank", text, pointsPossible: 3, pointsSource: "canvas", blankIds: ["blank1"], choices: [],
+  });
+  // Another section's copy: different ids, and an extra question pushed the speed one from Q2 to Q3.
+  const qs = [mk("501", 1, "Open Carmen_Ohio.txt for reading."), mk("502", 2, "A brand new question."), mk("503", 3, "Predict the output for 45, 52, and 0.")];
+  const resolve = (yaml: string, questions = qs) => {
+    const p = parseRubric(yaml);
+    expect(p.problems).toEqual([]);
+    return resolveSpecs(p.rubric!, questions);
+  };
+
+  it("uses the question at the position when its text matches", () => {
+    const r = resolve("questions:\n  Q3:\n    prompt: '45, 52, and 0'\n    answer: '^1$'\n");
+    expect(r.keyMatches.get("Q3")).toBe("503");
+    expect(r.problems).toEqual([]);
+  });
+  it("finds the question by text when ids differ or it moved, and says so", () => {
+    const r = resolve("questions:\n  Q2:\n    prompt: '45, 52, and 0'\n    answer: '^1$'\n  \"150545\":\n    prompt: 'carmen_ohio'\n    answer: '^r$'\n");
+    expect(r.keyMatches.get("Q2")).toBe("503");
+    expect(r.keyMatches.get("150545")).toBe("501");
+    expect(r.specs.has("502")).toBe(false);
+    expect(r.problems.map((p) => p.level)).toEqual(["warning", "warning"]);
+    expect(r.problems[0].message).toContain("Q2 doesn't match its prompt; using Q3");
+  });
+  it("refuses to guess when no question or several match", () => {
+    const none = resolve("questions:\n  Q3:\n    prompt: 'bagel'\n    answer: '^1$'\n");
+    expect(none.specs.size).toBe(0);
+    expect(none.problems[0].level).toBe("error");
+    const many = resolve("questions:\n  Q9:\n    prompt: '\\.'\n    answer: '^1$'\n");
+    expect(many.problems[0].level).toBe("error");
+    expect(many.problems[0].message).toContain("3 questions match");
+  });
+  it("falls back to id/position when the quiz has no question text", () => {
+    const blank = qs.map((q) => ({ ...q, text: "" }));
+    const r = resolve("questions:\n  Q3:\n    prompt: 'bagel'\n    answer: '^1$'\n", blank);
+    expect(r.keyMatches.get("Q3")).toBe("503");
+    expect(r.problems.map((p) => p.level)).toEqual(["warning"]);
+  });
+  it("rejects a bad prompt", () => {
+    const p = parseRubric("questions:\n  Q3:\n    prompt: '(unclosed'\n    answer: '^1$'\n");
+    expect(p.problems.some((x) => x.level === "error" && x.message.includes("bad regex"))).toBe(true);
+  });
+});

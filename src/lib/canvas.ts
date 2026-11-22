@@ -69,25 +69,43 @@ export interface Course {
   course_code: string;
   workflow_state: string;
   term?: { name: string };
+  /** enrollment types in this course: "teacher", "ta", "designer", "student", "observer" */
   roles: string[];
+  /** teacher or TA: the roles that can grade */
+  canGrade: boolean;
+  /** every grading enrollment is still an invitation that hasn't been accepted in Canvas */
+  invited: boolean;
 }
 
+type Enrollment = { type: string; role?: string; enrollment_state?: string };
+
+export const GRADING_ROLES = ["teacher", "ta"];
+
+/** Every course you're enrolled in, in any role, so the picker can say why a course can't be graded
+ * instead of leaving it out. Pending invitations are fetched separately: Canvas only counts an
+ * enrollment as current once it's been accepted. */
 export async function gradingCourses(): Promise<Course[]> {
-  const byId = new Map<number, Course>();
-  for (const role of ["teacher", "ta"]) {
-    const list = await getAll<Course & { enrollments?: { type: string }[] }>("/courses", [
-      ["enrollment_type", role],
-      ["include[]", "term"],
-      ["state[]", "available"],
-      ["state[]", "completed"],
-      ["state[]", "unpublished"],
-    ]);
-    for (const c of list) {
-      const prev = byId.get(c.id);
-      byId.set(c.id, { ...c, roles: [...(prev?.roles ?? []), role] });
-    }
+  const base: Query = [["include[]", "term"], ["state[]", "available"], ["state[]", "completed"], ["state[]", "unpublished"]];
+  const lists = await Promise.all([
+    getAll<Omit<Course, "roles" | "canGrade" | "invited"> & { enrollments?: Enrollment[] }>("/courses", base),
+    getAll<Omit<Course, "roles" | "canGrade" | "invited"> & { enrollments?: Enrollment[] }>("/courses", [...base, ["enrollment_state", "invited_or_pending"]])
+      .catch(() => []),
+  ]);
+  const byId = new Map<number, { course: Omit<Course, "roles" | "canGrade" | "invited">; enrollments: Enrollment[] }>();
+  for (const c of lists.flat()) {
+    const { enrollments = [], ...course } = c;
+    const prev = byId.get(c.id);
+    byId.set(c.id, { course, enrollments: [...(prev?.enrollments ?? []), ...enrollments] });
   }
-  return [...byId.values()].sort((a, b) => b.id - a.id);
+  return [...byId.values()].map(({ course, enrollments }) => {
+    const grading = enrollments.filter((e) => GRADING_ROLES.includes(e.type));
+    return {
+      ...course,
+      roles: [...new Set(enrollments.map((e) => e.type))],
+      canGrade: grading.length > 0,
+      invited: grading.length > 0 && grading.every((e) => e.enrollment_state === "invited" || e.enrollment_state === "creation_pending"),
+    };
+  }).sort((a, b) => b.id - a.id);
 }
 
 export type QuizFlavor = "classic" | "new_quiz";

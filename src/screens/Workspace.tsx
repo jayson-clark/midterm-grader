@@ -2,7 +2,7 @@ import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "rea
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { readTextFile, writeTextFile } from "../lib/canvas";
 import { gradeAll, overrideKey, type Override, type Overrides, type StudentResult } from "../lib/grader";
-import { parseRubric, resolveSpecs, type ParseResult, type Problem, type QuestionSpec } from "../lib/rubric";
+import { parseRubric, resolveSpecs, type ParseResult, type Problem, type QuestionSpec, type Resolved } from "../lib/rubric";
 import { toCsv } from "../lib/text";
 import type { QuizData } from "../lib/types";
 import { fmt, ScoreChange } from "../components/ui";
@@ -58,6 +58,8 @@ export interface RubricState {
   path: string | null;
   parsed: ParseResult;
   problems: Problem[];
+  /** rubric key -> matched question id (null: matches nothing in this quiz) */
+  keyMatches: Map<string, string | null>;
   hasErrors: boolean;
   /** draft differs from the file on disk */
   dirty: boolean;
@@ -119,7 +121,7 @@ export function Workspace({ quiz, mode }: { quiz: QuizData; mode: Mode }) {
   const deferred = useDeferredValue(rubricText);
   const parsed = useMemo(() => parseRubric(deferred), [deferred]);
   const resolved = useMemo(
-    () => (parsed.rubric ? resolveSpecs(parsed.rubric, quiz.questions) : { specs: new Map<string, QuestionSpec>(), problems: [] as Problem[] }),
+    () => (parsed.rubric ? resolveSpecs(parsed.rubric, quiz.questions) : { specs: new Map(), problems: [], keyMatches: new Map() } satisfies Resolved),
     [parsed, quiz.questions],
   );
   const hasErrors = parsed.problems.some((p) => p.level === "error") || resolved.problems.some((p) => p.level === "error");
@@ -179,7 +181,7 @@ export function Workspace({ quiz, mode }: { quiz: QuizData; mode: Mode }) {
 
   const problems = [...parsed.problems, ...resolved.problems];
   const rubric: RubricState = {
-    text: rubricText, path: rubricPath, parsed, problems, hasErrors,
+    text: rubricText, path: rubricPath, parsed, problems, keyMatches: resolved.keyMatches, hasErrors,
     dirty: savedText !== rubricText, loading, loadError, choose: chooseRubric, reload: reloadRubric,
   };
   const needsRubric = mode === "grade" && !rubricPath && resolved.specs.size === 0;

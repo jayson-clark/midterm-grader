@@ -2,6 +2,7 @@
 
 import { parse as parseYaml, LineCounter, isMap, parseDocument } from "yaml";
 import { KINDS, type Kind, type Question } from "./types";
+import { squash } from "./text";
 
 export type Whitespace = "lines" | "collapse" | "keep";
 export type BlankAnswers = "zero" | "keep" | "flag" | "rules";
@@ -60,6 +61,9 @@ export interface QuestionSpec extends PartSpec {
   origin: string;
   /** author's note for graders (`note:` on the question) */
   note?: string;
+  /** `prompt:` on a question entry: a regex the question's text must match, so the entry still
+   * finds its question when another section's copy of the quiz has different ids or order */
+  prompt?: { source: string; re: RegExp };
 }
 
 /**
@@ -125,7 +129,7 @@ const DEFAULT_OPTIONS: Options = { caseSensitive: false, whitespace: "lines", bl
 
 const SETTINGS_KEYS = ["case_sensitive", "whitespace", "blank_answers"];
 const SPEC_KEYS = [
-  "points", "use", "answer", "rules", "mode", "start", "otherwise", "blanks", "order", "scoring", "label", "note",
+  "points", "use", "answer", "rules", "mode", "start", "otherwise", "blanks", "order", "scoring", "label", "note", "prompt",
   ...SETTINGS_KEYS,
 ];
 const PART_KEYS = ["points", "answer", "rules", "mode", "start", "otherwise", "label", "note", "case_sensitive", "whitespace"];
@@ -474,7 +478,16 @@ function parseSpec(ctx: Ctx, path: (string | number)[], raw: unknown, opts: Opti
     ctx.warn(path, "no answer, rules, blanks or order: every answer will get the `otherwise` score");
   }
   const note = typeof raw.note === "string" ? raw.note.trim() : undefined;
-  return { ...base, keep, blanks, order, orderScoring, orderKey, options, origin, note };
+  let prompt: QuestionSpec["prompt"];
+  if (raw.prompt !== undefined) {
+    if (!origin.startsWith("questions.")) ctx.warn([...path, "prompt"], "prompt only applies to entries under questions:");
+    if (typeof raw.prompt !== "string" || !raw.prompt.trim()) ctx.error([...path, "prompt"], "expected a regex for a phrase from the question's text");
+    else {
+      try { prompt = { source: raw.prompt, re: compilePattern(raw.prompt, false) }; }
+      catch (e) { ctx.error([...path, "prompt"], `bad regex: ${(e as Error).message}`); }
+    }
+  }
+  return { ...base, keep, blanks, order, orderScoring, orderKey, options, origin, note, prompt };
 }
 
 export function parseRubric(text: string): ParseResult {
@@ -537,16 +550,53 @@ export function parseRubric(text: string): ParseResult {
   };
 }
 
-/** Which spec applies to each question, plus problems like keys that match no question. */
-export function resolveSpecs(rubric: Rubric, questions: Question[]): { specs: Map<string, QuestionSpec>; problems: Problem[] } {
+export interface Resolved {
+  specs: Map<string, QuestionSpec>;
+  problems: Problem[];
+  /** rubric key -> the question id it was matched to, or null when it matched nothing */
+  keyMatches: Map<string, string | null>;
+}
+
+/** Which spec applies to each question, plus problems like keys that match no question.
+ *
+ * A key is a question id, or a position (Q3 / #3). With `prompt:`, the question's text must also
+ * match: if the question at that id/position doesn't, the one question in the quiz that does is
+ * used instead (another section's copy can have different ids, or a different order). No match,
+ * or several, is an error, so the rubric never silently grades the wrong question. */
+export function resolveSpecs(rubric: Rubric, questions: Question[]): Resolved {
   const specs = new Map<string, QuestionSpec>();
   const problems: Problem[] = [];
+  const keyMatches = new Map<string, string | null>();
   const byId = new Map(questions.map((q) => [q.id, q]));
   const byPos = new Map(questions.map((q) => [q.position, q]));
   const claimed = new Map<string, string>();
+  const hasText = questions.some((q) => q.text.trim() !== "");
+  let noTextWarned = false;
   for (const key of rubric.questionKeys) {
+    keyMatches.set(key, null);
+    const spec = rubric.questions[key];
     const pos = /^(?:q|#)\s*(\d+)$/i.exec(key.trim());
-    const q = byId.get(key.trim()) ?? (pos ? byPos.get(Number(pos[1])) : undefined);
+    let q = byId.get(key.trim()) ?? (pos ? byPos.get(Number(pos[1])) : undefined);
+    if (spec.prompt && !hasText) {
+      if (!noTextWarned) problems.push({ level: "warning", message: "This quiz's question text isn't available, so prompt: checks are skipped and questions are matched by id or position only" });
+      noTextWarned = true;
+    } else if (spec.prompt) {
+      const re = spec.prompt.re;
+      const fits = (x: Question) => re.test(squash(x.text));
+      if (!q || !fits(q)) {
+        const found = questions.filter(fits);
+        const where = q ? `Q${q.position} doesn't match its prompt` : `no question with that id${pos ? " or position" : ""}`;
+        if (found.length === 1) {
+          problems.push({ level: "warning", message: `questions.${key}: ${where}; using Q${found[0].position}, which does` });
+          q = found[0];
+        } else {
+          problems.push({ level: "error", message: found.length === 0
+            ? `questions.${key}: ${where}, and no question in this quiz matches prompt '${spec.prompt.source}'`
+            : `questions.${key}: ${where}, and ${found.length} questions match prompt '${spec.prompt.source}' (${found.map((x) => `Q${x.position}`).join(", ")}); make the prompt more specific` });
+          continue;
+        }
+      }
+    }
     if (!q) {
       problems.push({ level: "warning", message: `questions.${key}: no question with that id${pos ? " or position" : ""} in this quiz (ignored)` });
       continue;
@@ -556,7 +606,8 @@ export function resolveSpecs(rubric: Rubric, questions: Question[]): { specs: Ma
       continue;
     }
     claimed.set(q.id, key);
-    specs.set(q.id, rubric.questions[key]);
+    keyMatches.set(key, q.id);
+    specs.set(q.id, spec);
   }
   for (const q of questions) {
     if (specs.has(q.id)) continue;
@@ -580,7 +631,7 @@ export function resolveSpecs(rubric: Rubric, questions: Question[]): { specs: Ma
       }
     }
   }
-  return { specs, problems };
+  return { specs, problems, keyMatches };
 }
 
 /** One-line, plain-English summary of how a question is graded. */
