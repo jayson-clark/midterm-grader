@@ -1,4 +1,5 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
+import { openBackupsFolder } from "../lib/canvas";
 import type { Cell } from "../lib/grader";
 
 export const fmt = (n: number | null | undefined, digits = 2) =>
@@ -51,6 +52,17 @@ export function Modal({ title, children, footer, onClose }: { title: ReactNode; 
         {footer && <div className="modal-foot">{footer}</div>}
       </div>
     </div>
+  );
+}
+
+/** Opens the folder where the scores Canvas had before each send are saved. */
+export function BackupsButton({ className = "btn", label = "Open backups folder" }: { className?: string; label?: string }) {
+  const [error, setError] = useState<string | null>(null);
+  return (
+    <button className={className} title={error ?? "Each time you send, the scores Canvas had before are saved here"}
+      onClick={() => { setError(null); openBackupsFolder().catch((e) => setError(String(e))); }}>
+      {error ? "Couldn't open the folder" : label}
+    </button>
   );
 }
 

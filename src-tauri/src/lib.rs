@@ -415,11 +415,25 @@ fn write_text_file(path: String, contents: String) -> Result<(), String> {
     fs::write(&path, contents).map_err(|e| format!("{path}: {e}"))
 }
 
+fn backups_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?.join("backups");
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir)
+}
+
+/// Shows the backups folder in Finder / File Explorer and returns its path.
+#[tauri::command]
+fn open_backups_folder(app: AppHandle) -> Result<String, String> {
+    let dir = backups_dir(&app)?;
+    let opener = if cfg!(target_os = "macos") { "open" } else if cfg!(target_os = "windows") { "explorer" } else { "xdg-open" };
+    std::process::Command::new(opener).arg(&dir).spawn().map_err(|e| format!("Couldn't open {}: {e}", dir.display()))?;
+    Ok(dir.to_string_lossy().into_owned())
+}
+
 /// Saves a JSON backup into the app's data folder and returns its path.
 #[tauri::command]
 fn save_backup(app: AppHandle, name: String, contents: String) -> Result<String, String> {
-    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?.join("backups");
-    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let dir = backups_dir(&app)?;
     let safe: String = name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
     let path = dir.join(format!("{safe}.json"));
     fs::write(&path, contents).map_err(|e| e.to_string())?;
@@ -451,7 +465,8 @@ pub fn run() {
             canvas,
             read_text_file,
             write_text_file,
-            save_backup
+            save_backup,
+            open_backups_folder
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

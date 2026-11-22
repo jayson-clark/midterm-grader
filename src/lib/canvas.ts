@@ -28,6 +28,8 @@ export const saveSettings = (baseUrl: string, token: string | null) =>
 export const forgetToken = () => invoke<void>("forget_token");
 export const readTextFile = (path: string) => invoke<string>("read_text_file", { path });
 export const writeTextFile = (path: string, contents: string) => invoke<void>("write_text_file", { path, contents });
+/** Shows the folder of pre-send score backups in Finder / File Explorer. */
+export const openBackupsFolder = () => invoke<string>("open_backups_folder");
 export const saveBackup = (name: string, contents: string) => invoke<string>("save_backup", { name, contents });
 
 type Query = [string, string][];

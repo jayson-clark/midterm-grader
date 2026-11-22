@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import { describeSpec, type Problem } from "../lib/rubric";
 import { truncate } from "../lib/text";
 import type { QuizData } from "../lib/types";
-import { ErrorNote, Spinner } from "../components/ui";
+import { BackupsButton, ErrorNote, Spinner } from "../components/ui";
 import type { RubricState, WorkspaceCtx } from "./Workspace";
 
 const fileName = (p: string) => p.split(/[\\/]/).pop() ?? p;
@@ -148,6 +148,7 @@ export function GradeOverview({ ctx, rubric, canSend, sendTitle, onSend, onExpor
                 ? "For New Quizzes this updates each student's total score. Grades stay hidden until you post them in Canvas."
                 : "Updates only the regraded questions. Grades stay hidden until you post them in Canvas."}
               action={<div className="row">
+                <BackupsButton className="btn ghost" />
                 <button className="btn" onClick={onExport}>Export CSV</button>
                 <button className="btn primary" disabled={!canSend} title={sendTitle} onClick={onSend}>Send to Canvas…</button>
               </div>} />

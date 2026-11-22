@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { getAssignment, hideGrades, setManualPosting } from "../lib/canvas";
 import { backupBeforeWrite, executeWrites, planWrites, type WriteResult } from "../lib/writeback";
-import { ErrorNote, fmt, Modal, ScoreChange, Spinner } from "../components/ui";
+import { BackupsButton, ErrorNote, fmt, Modal, ScoreChange, Spinner } from "../components/ui";
 import type { WorkspaceCtx } from "./Workspace";
 
 type Stage = "plan" | "running" | "done";
@@ -140,7 +140,7 @@ export function SendDialog({ ctx, onClose }: { ctx: WorkspaceCtx; onClose: () =>
           </div>
           <ErrorNote error={error} />
           <label className="row confirm"><input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} /> I've reviewed these changes and want to write them to Canvas.</label>
-          <div className="muted small">A backup of the current Canvas scores is saved before anything is sent.</div>
+          <div className="muted small">A backup of the current Canvas scores is saved before anything is sent. <BackupsButton className="btn link" /></div>
         </>
       )}
 
@@ -148,7 +148,7 @@ export function SendDialog({ ctx, onClose }: { ctx: WorkspaceCtx; onClose: () =>
         <>
           <div className="progress"><div style={{ width: `${progress.total ? (progress.done / progress.total) * 100 : 0}%` }} /></div>
           <div className="small muted">{progress.done} / {progress.total}{stage === "done" ? ` · ${ok} updated, ${failed.length} failed or skipped` : ""}</div>
-          {backup && <div className="small muted">Backup of previous scores: <span className="mono">{backup}</span></div>}
+          {backup && <div className="small muted">Backup of previous scores: <span className="mono" style={{ wordBreak: "break-all" }}>{backup}</span> <BackupsButton className="btn link" label="Show in folder" /></div>}
           <ErrorNote error={error} />
           {stage === "done" && postManually === false && makeManual && <div className="notice info small">Grades are hidden. Review them in SpeedGrader / the Gradebook and post when ready.</div>}
           <div className="card" style={{ maxHeight: 300, overflow: "auto" }}>
