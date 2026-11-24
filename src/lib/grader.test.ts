@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { gradeAll, gradeQuestion, overrideKey } from "./grader";
 import { planWrites } from "./writeback";
+import { migrateReviews, snapshot, staleQuestions } from "./review";
 import { describeSpec, parseRubric, resolveSpecs } from "./rubric";
 import { parseStudentAnalysisCsv } from "./sources/newQuizzesCsv";
 import { splitTopLevel, toCsv } from "./text";
@@ -270,5 +271,44 @@ describe("prompt: matching by question text", () => {
   it("rejects a bad prompt", () => {
     const p = parseRubric("questions:\n  Q3:\n    prompt: '(unclosed'\n    answer: '^1$'\n");
     expect(p.problems.some((x) => x.level === "error" && x.message.includes("bad regex"))).toBe(true);
+  });
+});
+
+describe("review snapshots", () => {
+  const q1 = `questions:\n  Q1:\n    answer: '^remainder$'\n`;
+
+  it("keeps a review when a rubric change doesn't affect the student", () => {
+    const snap = snapshot(grade(q1).get("1")!);
+    // Ada answered Remainder: an extra accepted answer changes nothing for her
+    const after = grade(`questions:\n  Q1:\n    answer: ['^remainder$', '^modulo$']\n`).get("1")!;
+    expect(staleQuestions(snap, after)).toEqual([]);
+  });
+
+  it("flags questions whose score changed or that were newly added", () => {
+    const snap = snapshot(grade(q1).get("2")!);
+    const after = grade(`questions:\n  Q1:\n    answer: '^quotient$'\n  Q3:\n    otherwise: { score: keep, flag: check this }\n`).get("2")!;
+    const st = staleQuestions(snap, after);
+    expect(st.map((x) => x.questionId).sort()).toEqual(["101", "103"]);
+    expect(st.find((x) => x.questionId === "101")).toMatchObject({ was: 0, wasGraded: true });
+    expect(st.find((x) => x.questionId === "103")).toMatchObject({ wasGraded: false });
+  });
+
+  it("flags a new flag even when the score is the same", () => {
+    const snap = snapshot(grade(q1).get("1")!);
+    const after = grade(`questions:\n  Q1:\n    rules:\n      - { match: '^remainder$', score: 1, flag: double-check } \n`).get("1")!;
+    expect(staleQuestions(snap, after).map((x) => x.questionId)).toEqual(["101"]);
+  });
+
+  it("flags a question removed from the rubric", () => {
+    const snap = snapshot(grade(q1).get("1")!);
+    const after = grade(`questions:\n  Q3:\n    otherwise: { score: keep }\n`).get("1")!;
+    const st = staleQuestions(snap, after);
+    expect(st.map((x) => x.questionId).sort()).toEqual(["101", "103"]);
+  });
+
+  it("reads reviews saved by older versions", () => {
+    expect(migrateReviews(undefined, ["1", "2"])).toEqual({ "1": null, "2": null });
+    expect(migrateReviews({ "1": {} }, ["2"])).toEqual({ "1": {} });
+    expect(migrateReviews(undefined, undefined)).toEqual({});
   });
 });

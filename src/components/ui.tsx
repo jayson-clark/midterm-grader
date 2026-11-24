@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { openBackupsFolder } from "../lib/canvas";
 import type { Cell } from "../lib/grader";
+import type { WorkspaceCtx } from "../screens/Workspace";
 
 export const fmt = (n: number | null | undefined, digits = 2) =>
   n == null || Number.isNaN(n) ? "–" : String(Math.round(n * 10 ** digits) / 10 ** digits);
@@ -32,6 +33,20 @@ export function ScoreChange({ from, to, max }: { from: number | null; to: number
       {max != null && <span className="faint"> / {fmt(max)}</span>}
     </span>
   );
+}
+
+/** "Q3, Q5" for the questions whose outcome changed since a student was reviewed. */
+export function staleLabel(ctx: WorkspaceCtx, userId: string): string {
+  const qs = ctx.stale.get(userId) ?? [];
+  const pos = qs.map((x) => ctx.quiz.questions.find((q) => q.id === x.questionId)?.position).filter((n): n is number => n != null).sort((a, b) => a - b);
+  return pos.map((n) => `Q${n}`).join(", ");
+}
+
+/** ✓ reviewed, ↻ reviewed but the rubric has since changed this student's results. */
+export function ReviewMark({ ctx, userId }: { ctx: WorkspaceCtx; userId: string }) {
+  if (ctx.reviewed.has(userId)) return <span className="check">✓</span>;
+  if (ctx.stale.has(userId)) return <span className="check stale" title={`Reviewed, but the rubric now grades ${staleLabel(ctx, userId)} differently`}>↻</span>;
+  return <span className="check" />;
 }
 
 export function StatusBadge({ cell }: { cell: Cell }) {

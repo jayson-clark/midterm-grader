@@ -1,11 +1,12 @@
-import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { readTextFile, writeTextFile } from "../lib/canvas";
 import { gradeAll, overrideKey, type Override, type Overrides, type StudentResult } from "../lib/grader";
 import { parseRubric, resolveSpecs, type ParseResult, type Problem, type QuestionSpec, type Resolved } from "../lib/rubric";
+import { migrateReviews, snapshot, staleQuestions, type Reviews, type StaleQuestion } from "../lib/review";
 import { toCsv } from "../lib/text";
 import type { QuizData } from "../lib/types";
-import { fmt, ScoreChange } from "../components/ui";
+import { fmt, ReviewMark, ScoreChange } from "../components/ui";
 import { RubricTab } from "./RubricTab";
 import { AnswersTab } from "./AnswersTab";
 import { ReviewTab } from "./ReviewTab";
@@ -27,7 +28,10 @@ export interface WorkspaceCtx {
   results: Map<string, StudentResult>;
   overrides: Overrides;
   setOverride: (userId: string, questionId: string, o: Override | null) => void;
+  /** students whose review still matches what the rubric gives them now */
   reviewed: Set<string>;
+  /** students marked reviewed whose results have since changed, with the questions that changed */
+  stale: Map<string, StaleQuestion[]>;
   setReviewed: (userId: string, on: boolean) => void;
   goTo: (tab: Tab, sel?: { questionId?: string; userId?: string }) => void;
 }
@@ -36,6 +40,8 @@ interface Saved {
   rubricText?: string;
   rubricPath?: string | null;
   overrides?: Overrides;
+  reviews?: Reviews;
+  /** older versions: plain list of reviewed user ids */
   reviewed?: string[];
 }
 
@@ -76,7 +82,7 @@ export function Workspace({ quiz, mode }: { quiz: QuizData; mode: Mode }) {
   const [rubricPath, setRubricPath] = useState<string | null>(saved.rubricPath ?? null);
   const [savedText, setSavedText] = useState<string | null>(saved.rubricPath ? (saved.rubricText ?? null) : null);
   const [overrides, setOverrides] = useState<Overrides>(saved.overrides ?? {});
-  const [reviewed, setReviewedSet] = useState<Set<string>>(new Set(saved.reviewed ?? []));
+  const [reviews, setReviews] = useState<Reviews>(() => migrateReviews(saved.reviews, saved.reviewed));
   const [sel, setSel] = useState<{ questionId?: string; userId?: string }>({});
   const [sending, setSending] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -112,11 +118,11 @@ export function Workspace({ quiz, mode }: { quiz: QuizData; mode: Mode }) {
   useEffect(() => {
     const t = setTimeout(() => {
       try {
-        localStorage.setItem(storageKey(quiz), JSON.stringify({ rubricText, rubricPath, overrides, reviewed: [...reviewed] } satisfies Saved));
+        localStorage.setItem(storageKey(quiz), JSON.stringify({ rubricText, rubricPath, overrides, reviews } satisfies Saved));
       } catch { /* storage full or blocked: not fatal */ }
     }, 300);
     return () => clearTimeout(t);
-  }, [quiz, rubricText, rubricPath, overrides, reviewed]);
+  }, [quiz, rubricText, rubricPath, overrides, reviews]);
 
   const deferred = useDeferredValue(rubricText);
   const parsed = useMemo(() => parseRubric(deferred), [deferred]);
@@ -127,7 +133,61 @@ export function Workspace({ quiz, mode }: { quiz: QuizData; mode: Mode }) {
   const hasErrors = parsed.problems.some((p) => p.level === "error") || resolved.problems.some((p) => p.level === "error");
   const results = useMemo(() => gradeAll(quiz, resolved.specs, overrides), [quiz, resolved.specs, overrides]);
 
+  // Reviews saved before snapshots existed: take what's on screen now as what was reviewed.
+  // This runs on the first render, before a grader's rubric file is re-read from disk.
+  useEffect(() => {
+    if (!Object.values(reviews).some((v) => v === null)) return;
+    setReviews((prev) => {
+      const next = { ...prev };
+      for (const [id, v] of Object.entries(next)) {
+        const r = results.get(id);
+        if (v === null) { if (r) next[id] = snapshot(r); else delete next[id]; }
+      }
+      return next;
+    });
+  }, [results, reviews]);
+
+  // A reviewer's own override edits shouldn't undo their review: refresh just that question.
+  const touched = useRef<Array<[string, string]>>([]);
+  useEffect(() => {
+    if (!touched.current.length) return;
+    const pending = touched.current;
+    touched.current = [];
+    setReviews((prev) => {
+      let next = prev;
+      for (const [userId, qid] of pending) {
+        const snap = prev[userId];
+        const r = results.get(userId);
+        if (!snap || !r) continue;
+        const cur = snapshot(r);
+        if (next === prev) next = { ...prev };
+        const s = { ...snap };
+        if (cur[qid] != null) s[qid] = cur[qid]; else delete s[qid];
+        next[userId] = s;
+      }
+      return next;
+    });
+  }, [results]);
+
+  // While the rubric doesn't parse, results are meaningless: don't count reviews as changed.
+  const stale = useMemo(() => {
+    const m = new Map<string, StaleQuestion[]>();
+    if (hasErrors) return m;
+    for (const [id, snap] of Object.entries(reviews)) {
+      const r = results.get(id);
+      if (!snap || !r) continue;
+      const qs = staleQuestions(snap, r);
+      if (qs.length) m.set(id, qs);
+    }
+    return m;
+  }, [reviews, results, hasErrors]);
+  const reviewed = useMemo(
+    () => new Set(Object.keys(reviews).filter((id) => results.has(id) && !stale.has(id))),
+    [reviews, results, stale],
+  );
+
   const setOverride = useCallback((userId: string, questionId: string, o: Override | null) => {
+    touched.current.push([userId, questionId]);
     setOverrides((prev) => {
       const next = { ...prev };
       if (o == null || (o.score == null && o.comment == null)) delete next[overrideKey(userId, questionId)];
@@ -136,18 +196,19 @@ export function Workspace({ quiz, mode }: { quiz: QuizData; mode: Mode }) {
     });
   }, []);
   const setReviewed = useCallback((userId: string, on: boolean) => {
-    setReviewedSet((prev) => {
-      const next = new Set(prev);
-      if (on) next.add(userId); else next.delete(userId);
+    setReviews((prev) => {
+      const next = { ...prev };
+      const r = results.get(userId);
+      if (on && r) next[userId] = snapshot(r); else delete next[userId];
       return next;
     });
-  }, []);
+  }, [results]);
   const goTo = useCallback((t: Tab, s?: { questionId?: string; userId?: string }) => {
     if (s) setSel((prev) => ({ ...prev, ...s }));
     setTab(t);
   }, []);
 
-  const ctx: WorkspaceCtx = { quiz, specs: resolved.specs, results, overrides, setOverride, reviewed, setReviewed, goTo };
+  const ctx: WorkspaceCtx = { quiz, specs: resolved.specs, results, overrides, setOverride, reviewed, stale, setReviewed, goTo };
 
   const all = [...results.values()];
   const changed = all.filter((r) => r.changed).length;
@@ -171,7 +232,7 @@ export function Workspace({ quiz, mode }: { quiz: QuizData; mode: Mode }) {
       return [
         s.name, s.userId, s.section ?? "", fmt(r.canvasScore, 4), fmt(r.newScore, 4),
         r.canvasScore != null && r.newScore != null ? fmt(r.newScore - r.canvasScore, 4) : "",
-        reviewed.has(s.userId) ? "yes" : "",
+        reviewed.has(s.userId) ? "yes" : stale.has(s.userId) ? "needs another look" : "",
         Object.values(r.cells).flatMap((c) => c.flags.map((f) => `Q${quiz.questions.find((q) => q.id === c.questionId)?.position}: ${f}`)).join("; "),
         ...qs.flatMap((q) => { const c = r.cells[q.id]; return [fmt(c.canvasPoints, 4), fmt(c.score, 4), c.comments.join(" ")]; }),
       ];
@@ -234,7 +295,7 @@ export function Workspace({ quiz, mode }: { quiz: QuizData; mode: Mode }) {
 }
 
 function Gradebook({ ctx }: { ctx: WorkspaceCtx }) {
-  const { quiz, results, specs, reviewed, goTo, overrides } = ctx;
+  const { quiz, results, specs, goTo, overrides } = ctx;
   const [onlyRubric, setOnlyRubric] = useState(true);
   const [filter, setFilter] = useState<"all" | "changed" | "flagged">("all");
   const qs = quiz.questions.filter((q) => !onlyRubric || specs.has(q.id) || quiz.students.some((s) => overrides[overrideKey(s.userId, q.id)]));
@@ -267,7 +328,7 @@ function Gradebook({ ctx }: { ctx: WorkspaceCtx }) {
               return (
                 <tr key={s.userId} className="click" onClick={() => goTo("review", { userId: s.userId })}>
                   <td className="sticky nowrap">
-                    <span className="check">{reviewed.has(s.userId) ? "✓" : ""}</span> {s.sortableName}
+                    <ReviewMark ctx={ctx} userId={s.userId} /> {s.sortableName}
                   </td>
                   <td className="right"><ScoreChange from={r.canvasScore} to={r.newScore} /></td>
                   {qs.map((q) => {

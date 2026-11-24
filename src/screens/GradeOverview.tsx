@@ -70,7 +70,7 @@ export function GradeOverview({ ctx, rubric, canSend, sendTitle, onSend, onExpor
   onSend: () => void;
   onExport: () => void;
 }) {
-  const { quiz, specs, results, reviewed, goTo } = ctx;
+  const { quiz, specs, results, reviewed, stale, goTo } = ctx;
   const r = rubric.parsed.rubric;
   const errors = rubric.problems.filter((p) => p.level === "error");
   const warnings = rubric.problems.filter((p) => p.level === "warning");
@@ -83,10 +83,11 @@ export function GradeOverview({ ctx, rubric, canSend, sendTitle, onSend, onExpor
   const flaggedNotReviewed = flagged.filter((x) => !reviewed.has(x.userId));
   const graded = quiz.questions.filter((q) => specs.has(q.id));
   const firstFlagged = quiz.students.find((s) => flaggedNotReviewed.some((f) => f.userId === s.userId));
-  const firstUnreviewed = quiz.students.find((s) => !reviewed.has(s.userId) && results.get(s.userId)?.changed);
+  const firstUnreviewed = quiz.students.find((s) => stale.has(s.userId))
+    ?? quiz.students.find((s) => !reviewed.has(s.userId) && results.get(s.userId)?.changed);
 
   const done1 = flaggedNotReviewed.length === 0;
-  const done2 = changed > 0 && all.filter((x) => x.changed).every((x) => reviewed.has(x.userId));
+  const done2 = changed > 0 && stale.size === 0 && all.filter((x) => x.changed).every((x) => reviewed.has(x.userId));
 
   return (
     <div className="pane grow">
@@ -140,7 +141,12 @@ export function GradeOverview({ ctx, rubric, canSend, sendTitle, onSend, onExpor
               action={firstFlagged && <button className="btn primary" onClick={() => goTo("review", { userId: firstFlagged.userId })}>Review flagged</button>} />
             <Step n={2} done={done2} current={done1 && !done2}
               title={`Look over the ${changed} regraded submission${changed === 1 ? "" : "s"}`}
-              detail={`${reviewed.size} of ${quiz.students.length} marked reviewed. Use j / k to move between students and r to mark reviewed.`}
+              detail={<>
+                {reviewed.size} of {quiz.students.length} marked reviewed. Use j / k to move between students and r to mark reviewed.
+                {stale.size > 0 && <div className="warn-text" style={{ marginTop: 4 }}>
+                  The rubric changed the results of {stale.size} student{stale.size === 1 ? "" : "s"} you'd already reviewed (↻), so they're back on the list. Students whose results didn't change keep their review.
+                </div>}
+              </>}
               action={firstUnreviewed && <button className="btn" onClick={() => goTo("review", { userId: firstUnreviewed.userId })}>Continue reviewing</button>} />
             <Step n={3} done={false} current={done1 && done2}
               title="Send the new grades to Canvas"
@@ -189,7 +195,7 @@ export function GradeOverview({ ctx, rubric, canSend, sendTitle, onSend, onExpor
   );
 }
 
-function Step({ n, done, current, title, detail, action }: { n: number; done: boolean; current: boolean; title: string; detail?: string; action?: ReactNode }) {
+function Step({ n, done, current, title, detail, action }: { n: number; done: boolean; current: boolean; title: string; detail?: ReactNode; action?: ReactNode }) {
   return (
     <div className={`step ${done ? "done" : current ? "current" : ""}`}>
       <span className="n">{done ? "✓" : n}</span>

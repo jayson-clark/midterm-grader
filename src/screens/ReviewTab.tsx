@@ -1,14 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { overrideKey, type Cell } from "../lib/grader";
 import type { Question, Response, Student } from "../lib/types";
-import { fmt, ScoreChange, StatusBadge } from "../components/ui";
+import { fmt, ReviewMark, ScoreChange, StatusBadge, staleLabel } from "../components/ui";
+import type { StaleQuestion } from "../lib/review";
 import type { WorkspaceCtx } from "./Workspace";
 
 type Filter = "all" | "changed" | "flagged" | "todo";
 
 /** Per-submission review: one student at a time, every rubric question with the why. */
 export function ReviewTab({ ctx, userId, setUserId }: { ctx: WorkspaceCtx; userId?: string; setUserId: (id: string) => void }) {
-  const { quiz, results, reviewed, setReviewed } = ctx;
+  const { quiz, results, reviewed, stale, setReviewed } = ctx;
   const [filter, setFilter] = useState<Filter>("all");
   const [search, setSearch] = useState("");
   const [showAll, setShowAll] = useState(false);
@@ -42,7 +43,9 @@ export function ReviewTab({ ctx, userId, setUserId }: { ctx: WorkspaceCtx; userI
 
   if (!student) return <div className="empty-state grow">No submissions.</div>;
   const r = results.get(student.userId)!;
-  const shown = quiz.questions.filter((q) => showAll || r.cells[q.id].status !== "untouched");
+  const staleQs = stale.get(student.userId) ?? [];
+  const staleById = new Map(staleQs.map((x) => [x.questionId, x]));
+  const shown = quiz.questions.filter((q) => showAll || r.cells[q.id].status !== "untouched" || staleById.has(q.id));
   const hiddenCount = quiz.questions.length - shown.length;
 
   function markAndNext() {
@@ -69,7 +72,7 @@ export function ReviewTab({ ctx, userId, setUserId }: { ctx: WorkspaceCtx; userI
             const sr = results.get(s.userId)!;
             return (
               <div key={s.userId} className={`student-row ${s.userId === student.userId ? "active" : ""}`} onClick={() => setUserId(s.userId)}>
-                <span className="check">{reviewed.has(s.userId) ? "✓" : ""}</span>
+                <ReviewMark ctx={ctx} userId={s.userId} />
                 <span className="grow ellipsis">{s.sortableName}</span>
                 {sr.flagged && <span className="dot flag" title="needs review" />}
                 <ScoreChange from={sr.canvasScore} to={sr.newScore} />
@@ -107,10 +110,15 @@ export function ReviewTab({ ctx, userId, setUserId }: { ctx: WorkspaceCtx; userI
           )}
         </div>
         <div className="pane-body" ref={bodyRef}>
+          {staleQs.length > 0 && (
+            <div className="notice warn" style={{ margin: "14px 16px 0" }}>
+              <b>The rubric changed since you reviewed this student.</b> {staleLabel(ctx, student.userId)} now grade{staleQs.length === 1 ? "s" : ""} differently (outlined below). Check {staleQs.length === 1 ? "it" : "them"}, then mark reviewed again.
+            </div>
+          )}
           {shown.length === 0 && (
             <div className="empty-state">The rubric doesn't grade any questions yet, so every Canvas score stands. Add questions on the Rubric tab.</div>
           )}
-          {shown.map((q) => <QuestionCard key={q.id} ctx={ctx} q={q} s={student} cell={r.cells[q.id]} resp={student.responses[q.id]} />)}
+          {shown.map((q) => <QuestionCard key={q.id} ctx={ctx} q={q} s={student} cell={r.cells[q.id]} resp={student.responses[q.id]} stale={staleById.get(q.id)} />)}
           {hiddenCount > 0 && (
             <div style={{ padding: "4px 16px 20px" }}>
               <button className="btn sm ghost" onClick={() => setShowAll(!showAll)}>
@@ -127,7 +135,7 @@ export function ReviewTab({ ctx, userId, setUserId }: { ctx: WorkspaceCtx; userI
   );
 }
 
-function QuestionCard({ ctx, q, s, cell, resp }: { ctx: WorkspaceCtx; q: Question; s: Student; cell: Cell; resp?: Response }) {
+function QuestionCard({ ctx, q, s, cell, resp, stale }: { ctx: WorkspaceCtx; q: Question; s: Student; cell: Cell; resp?: Response; stale?: StaleQuestion }) {
   const [promptOpen, setPromptOpen] = useState(false);
   const [showRaw, setShowRaw] = useState(false);
   const ov = ctx.overrides[overrideKey(s.userId, q.id)];
@@ -143,11 +151,12 @@ function QuestionCard({ ctx, q, s, cell, resp }: { ctx: WorkspaceCtx; q: Questio
 
   const cls = cell.flags.length ? "flagged" : cell.changed && cell.status !== "untouched" ? "changed" : "";
   return (
-    <div className={`qcard ${cls}`}>
+    <div className={`qcard ${cls} ${stale ? "stale-review" : ""}`}>
       <div className="qcard-head">
         <b>Q{q.position}</b>
         <span className="muted small">{q.kind}</span>
         <StatusBadge cell={cell} />
+        {stale && <span className="badge warn" title="This question's result is different from when you marked the student reviewed">{staleWhy(stale, cell)}</span>}
         <span className="spacer" />
         <ScoreChange from={cell.status === "untouched" || cell.status === "kept" ? null : cell.canvasPoints} to={cell.score} max={cell.max} />
       </div>
@@ -199,4 +208,12 @@ function QuestionCard({ ctx, q, s, cell, resp }: { ctx: WorkspaceCtx; q: Questio
       </div>
     </div>
   );
+}
+
+function staleWhy(st: StaleQuestion, cell: Cell): string {
+  if (!st.wasGraded) return "newly in rubric";
+  if (cell.status === "untouched") return `removed from rubric (was ${fmt(st.was)})`;
+  if (st.was !== cell.score) return `changed since review (was ${fmt(st.was)})`;
+  if (cell.flags.length) return "newly flagged since review";
+  return "comment or flag changed since review";
 }
